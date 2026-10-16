@@ -8,12 +8,12 @@
 import { useMemo, useState } from 'react';
 import { Database, History, Play } from 'lucide-react';
 import { useApp } from '@/app/state';
-import { Button, EmptyState, Notice, Panel, SectionTitle, cx } from '@/components/ui/primitives';
+import { Button, EmptyState, Panel, SectionTitle, cx } from '@/components/ui/primitives';
 import { formatBytes, formatCount, formatDateTime, formatDuration, formatRelativeTime } from '@/lib/format';
 import type { ScanSummary } from '@/types/contracts';
 
 export function HistoryView(): React.JSX.Element {
-  const { state, actions } = useApp();
+  const { state } = useApp();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const history = state.scan.history;
   const record = useMemo(
@@ -29,17 +29,6 @@ export function HistoryView(): React.JSX.Element {
           Stored locally in this PC's SQLite database. Diskora never uploads scan data.
         </p>
       </header>
-
-      {!state.entitlement.features.scanHistory ? (
-        <div className="px-3 pt-3">
-          <Notice tone="info" title="Free plan keeps the current session">
-            Diskora Pro stores every scan so you can compare how a volume changes over time.{' '}
-            <button type="button" className="underline" onClick={() => actions.navigate('licensing')}>
-              Compare plans
-            </button>
-          </Notice>
-        </div>
-      ) : null}
 
       <div className="flex min-h-0 flex-1">
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">

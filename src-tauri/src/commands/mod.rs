@@ -13,12 +13,10 @@
 //! `validate_path` in `files.rs` is the shared path guard. Anything that takes a user-supplied
 //! path either uses it or has an equivalent check of its own; the tests below cover both.
 
-pub mod cleanup;
 pub mod drives;
 pub mod duplicates;
 pub mod files;
 pub mod large_files;
-pub mod licensing;
 pub mod scan;
 pub mod settings;
 
@@ -34,16 +32,14 @@ mod tests {
     #[test]
     fn every_command_module_is_declared() {
         let modules: Vec<&str> = vec![
-            stringify!(crate::commands::cleanup),
             stringify!(crate::commands::drives),
             stringify!(crate::commands::duplicates),
             stringify!(crate::commands::files),
             stringify!(crate::commands::large_files),
-            stringify!(crate::commands::licensing),
             stringify!(crate::commands::scan),
             stringify!(crate::commands::settings),
         ];
-        assert_eq!(modules.len(), 8);
+        assert_eq!(modules.len(), 6);
     }
 
     /// `validate_path` must be reachable crate-wide: the destructive paths reuse it rather than

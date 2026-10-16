@@ -23,10 +23,9 @@ import {
   Settings,
   Sparkles,
   Square,
-  Trash2,
   X,
 } from 'lucide-react';
-import { Badge, Button, Divider, Panel, ProgressBar, SectionTitle, cx } from '@/components/ui/primitives';
+import { Button, Divider, Panel, ProgressBar, SectionTitle, cx } from '@/components/ui/primitives';
 import { StorageRing } from '@/components/ui/StorageRing';
 import { formatBytes, formatCount, formatDuration, formatPercent } from '@/lib/format';
 import { categoryColor } from '@/lib/categories';
@@ -38,14 +37,13 @@ const NAV: Array<{ route: Route; label: string; icon: typeof Home; pro?: boolean
   { route: 'analyze', label: 'Drives and folders', icon: FolderTree },
   { route: 'large-files', label: 'Large Files', icon: FileSearch },
   { route: 'duplicates', label: 'Duplicate Finder', icon: Copy },
-  { route: 'cleanup', label: 'Cleanup Suggestions', icon: Trash2 },
-  { route: 'history', label: 'Scan History', icon: History, pro: true },
+  { route: 'history', label: 'Scan History', icon: History },
   { route: 'settings', label: 'Settings', icon: Settings },
 ];
 
 export function Sidebar(): React.JSX.Element {
   const { state, actions } = useApp();
-  const { drives, selectedDriveId, scan, viz, entitlement } = state;
+  const { drives, selectedDriveId, scan, viz } = state;
 
   const drive = drives.find((d) => d.id === selectedDriveId) ?? drives[0] ?? null;
   const scanning = scan.scanning;
@@ -105,11 +103,7 @@ export function Sidebar(): React.JSX.Element {
             >
               <Icon aria-hidden className="size-3.5 shrink-0" />
               <span className="flex-1 truncate">{item.label}</span>
-              {item.pro && !entitlement.features.scanHistory ? (
-                <Badge tone="neutral" className="shrink-0">
-                  Pro
-                </Badge>
-              ) : null}
+
             </button>
           );
         })}
@@ -244,7 +238,7 @@ export function Sidebar(): React.JSX.Element {
                       actions.navigate('analyze');
                       actions.focusPath(win.path);
                     } else {
-                      actions.navigate('cleanup');
+                      actions.navigate('large-files');
                     }
                   }}
                   className="group flex w-full items-center gap-2 rounded-control border border-line bg-surface px-2 py-1.5 text-left shadow-panel transition-colors hover:border-line-strong"

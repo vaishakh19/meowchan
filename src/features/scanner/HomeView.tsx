@@ -44,7 +44,7 @@ export function HomeView(): React.JSX.Element {
         <p className="mt-1 max-w-2xl text-xs leading-relaxed text-ink-muted">
           {result
             ? `Last scan of ${result.rootName} finished ${formatDateTime(result.finishedAt ?? result.startedAt)} in ${formatDuration(result.durationMs ?? 0)}.`
-            : 'Diskora scans a drive, maps every folder by real size, and shows you exactly what is safe to reclaim. Everything runs locally on this PC — nothing is uploaded.'}
+            : 'Diskora scans a drive, maps every folder by real size, and helps you find what is using space. Everything runs locally on this PC — nothing is uploaded.'}
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button
@@ -204,7 +204,7 @@ export function HomeView(): React.JSX.Element {
                           else if (win.path) {
                             actions.navigate('analyze');
                             actions.focusPath(win.path);
-                          } else actions.navigate('cleanup');
+                          } else actions.navigate('large-files');
                         }}
                         className="flex w-full items-center gap-2 rounded-control px-1.5 py-1 text-left transition-colors hover:bg-surface-sunken"
                       >
@@ -226,10 +226,10 @@ export function HomeView(): React.JSX.Element {
               <Button
                 size="sm"
                 className="mt-2 w-full justify-center"
-                onClick={() => actions.navigate('cleanup')}
+                onClick={() => actions.navigate('large-files')}
               >
                 <Trash2 aria-hidden className="size-3" />
-                Review cleanup suggestions
+                Review large files
               </Button>
             </Panel>
 

@@ -5,7 +5,7 @@ on:
   pull_request:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   windows:
     runs-on: windows-2022
@@ -22,9 +22,29 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
-      - run: npm run rust:test
+      - name: Native tests
+        shell: pwsh
+        run: |
+          cmd /c "npm run rust:test > native.log 2>&1"
+          $code = $LASTEXITCODE
+          Get-Content native.log
+          if ($code -ne 0) {
+            $message = ((Get-Content native.log -Tail 160) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Native diagnostics::$message"
+            exit $code
+          }
       - run: npm test
-      - run: npm run app:build
+      - name: Package
+        shell: pwsh
+        run: |
+          cmd /c "npm run app:build > package.log 2>&1"
+          $code = $LASTEXITCODE
+          Get-Content package.log
+          if ($code -ne 0) {
+            $message = ((Get-Content package.log -Tail 100) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Packaging diagnostics::$message"
+            exit $code
+          }
       - name: Launch a renamed executable outside the build tree
         shell: pwsh
         run: |
@@ -51,3 +71,14 @@ jobs:
           name: Cargo-lock
           path: src-tauri/Cargo.lock
           if-no-files-found: ignore
+      # Session-only delivery: the sandbox cannot reach Actions artifact storage.
+      - name: Deliver verified binaries to the session branch
+        if: github.ref == 'refs/heads/arena/d1f1769d-meowchan'
+        shell: pwsh
+        run: |
+          git config user.name "Diskora build"
+          git config user.email "diskora-build@users.noreply.github.com"
+          git add src-tauri/Cargo.lock
+          git add -f release/Diskora.exe release/Diskora-setup.exe
+          git commit -m "Deliver Windows build and dependency lock [skip ci]"
+          git push origin HEAD:arena/d1f1769d-meowchan

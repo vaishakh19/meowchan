@@ -66,7 +66,6 @@ pub struct LargeFilePage {
 
 #[tauri::command]
 pub fn list_large_files(query: LargeFileQuery, state: State<'_, AppState>) -> AppResult<LargeFilePage> {
-    crate::authz::authorize_state(&state, crate::authz::Permission::LargeFileFinder)?;
     let scans = state.scans()?;
     let entry = scans
         .get(&query.scan_id)

@@ -13,23 +13,15 @@ import type {
   AppSettings,
   AppVersion,
   ChildrenPage,
-  CleanupFinding,
-  CleanupPlan,
-  CleanupPreview,
-  CleanupResult,
-  CleanupRule,
   DriveInfo,
   DuplicateOptions,
   DuplicateProgress,
   DuplicateReport,
   DuplicateVerifyResult,
-  Entitlement,
-  EntitlementEvent,
   FileDetails,
   LargeFilePage,
   LargeFileQuery,
   PrivacyReport,
-  RecycleBinSummary,
   ScanOptions,
   ScanProgress,
   ScanResult,
@@ -59,7 +51,7 @@ export function createTauriTransport(): BackendTransport {
   return {
     kind: 'tauri',
     label: 'Rust backend',
-    canMutate: true,
+    canMutate: false,
 
     /* Drives & scanning */
     listDrives: () => invoke<DriveInfo[]>('list_drives'),
@@ -87,18 +79,6 @@ export function createTauriTransport(): BackendTransport {
     duplicatesGet: (reportId: string) => invoke<DuplicateReport | null>('duplicates_get', { reportId }),
     verifyDuplicates: (pathA: string, pathB: string) =>
       invoke<DuplicateVerifyResult>('verify_duplicates', { pathA, pathB }),
-
-    /* Cleanup */
-    cleanupScan: (scanId: string, rules: CleanupRule[]) => invoke<CleanupFinding[]>('cleanup_scan', { scanId, rules }),
-    cleanupPreview: (plan: CleanupPlan) => invoke<CleanupPreview>('cleanup_preview', { plan }),
-    cleanupExecute: (plan: CleanupPlan) => invoke<CleanupResult>('cleanup_execute', { plan }),
-    recycleBinSummary: () => invoke<RecycleBinSummary>('recycle_bin_summary'),
-
-    /* Licensing */
-    entitlementGet: () => invoke<Entitlement>('entitlement_get'),
-    licenseActivate: (licenseKey: string) => invoke<Entitlement>('license_activate', { licenseKey }),
-    licenseDeactivate: () => invoke<Entitlement>('license_deactivate'),
-    entitlementEvents: () => invoke<EntitlementEvent[]>('entitlement_events'),
 
     /* Settings & privacy */
     settingsGet: () => invoke<AppSettings>('settings_get'),

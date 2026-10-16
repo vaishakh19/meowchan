@@ -571,28 +571,8 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 
 export interface AppSettings {
   theme: ThemeMode;
-  /** Default root for new scans. */
-  defaultScanRoot: string | null;
-  /** Max children kept per folder in the tree sent to the UI. */
   maxChildrenPerNode: number;
-  /** Follow junctions / symlinks while scanning. */
   followLinks: boolean;
-  /** Confirm before any cleanup action, even single items. */
-  confirmBeforeCleanup: boolean;
-  /** Prefer moving to the Recycle Bin over permanent deletion. */
-  preferRecycleBin: boolean;
-  /** Minimum age (days) for "large unused file" suggestions. */
-  largeUnusedDays: number;
-  /** Directories the user opted into as cache locations. */
-  cachePaths: string[];
-  /** Directories the user opted into as temporary locations. */
-  tempPaths: string[];
-  /** Never touch these paths. */
-  excludePaths: string[];
-  /** Optional crash reporting. Off by default. */
-  crashReporting: boolean;
-  /** Free-tier duplicate group limit (0 = unlimited). */
-  duplicateGroupLimit: number;
 }
 
 export interface PrivacyReport {

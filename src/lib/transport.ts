@@ -19,23 +19,15 @@ import type {
   AppSettings,
   AppVersion,
   ChildrenPage,
-  CleanupFinding,
-  CleanupPlan,
-  CleanupPreview,
-  CleanupResult,
-  CleanupRule,
   DriveInfo,
   DuplicateOptions,
   DuplicateProgress,
   DuplicateReport,
   DuplicateVerifyResult,
-  Entitlement,
-  EntitlementEvent,
   FileDetails,
   LargeFilePage,
   LargeFileQuery,
   PrivacyReport,
-  RecycleBinSummary,
   ScanOptions,
   ScanProgress,
   ScanResult,
@@ -73,18 +65,6 @@ export interface BackendTransport {
   duplicatesGet(reportId: string): Promise<DuplicateReport | null>;
   verifyDuplicates(pathA: string, pathB: string): Promise<DuplicateVerifyResult>;
 
-  /* Cleanup */
-  cleanupScan(scanId: string, rules: CleanupRule[]): Promise<CleanupFinding[]>;
-  cleanupPreview(plan: CleanupPlan): Promise<CleanupPreview>;
-  cleanupExecute(plan: CleanupPlan): Promise<CleanupResult>;
-  recycleBinSummary(): Promise<RecycleBinSummary>;
-
-  /* Licensing */
-  entitlementGet(): Promise<Entitlement>;
-  licenseActivate(licenseKey: string): Promise<Entitlement>;
-  licenseDeactivate(): Promise<Entitlement>;
-  entitlementEvents(): Promise<EntitlementEvent[]>;
-
   /* Settings & privacy */
   settingsGet(): Promise<AppSettings>;
   settingsUpdate(patch: Partial<AppSettings>): Promise<AppSettings>;
@@ -114,9 +94,6 @@ export async function getTransport(): Promise<BackendTransport> {
   if (isTauriRuntime()) {
     const { createTauriTransport } = await import('./backend/tauriTransport');
     cached = createTauriTransport();
-  } else if (import.meta.env.MODE === 'test') {
-    const { createDemoTransport } = await import('./backend/demo/demoTransport');
-    cached = createDemoTransport();
   }
   if (!cached) throw new Error('Diskora requires its Windows desktop runtime. Build and launch Diskora.exe; a browser cannot scan your disks.');
   return cached;

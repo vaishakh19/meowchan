@@ -23,22 +23,14 @@ import {
 import type {
   AppSettings,
   AppVersion,
-  CleanupRule,
-  CleanupFinding,
-  CleanupPlan,
-  CleanupPreview,
-  CleanupResult,
   DriveInfo,
   DuplicateOptions,
   DuplicateProgress,
   DuplicateReport,
-  Entitlement,
-  EntitlementEvent,
   FileDetails,
   LargeFilePage,
   LargeFileQuery,
   PrivacyReport,
-  RecycleBinSummary,
   ScanProgress,
   ScanResult,
   ScanSummary,
@@ -46,7 +38,6 @@ import type {
 } from '@/types/contracts';
 import { getTransport, type BackendTransport, type Unsubscribe } from '@/lib/transport';
 import { findNode } from '@/features/visualization/layout';
-import { freeEntitlement } from '@/features/licensing/entitlements';
 import { nextId } from '@/lib/id';
 
 export type Route =
@@ -54,11 +45,9 @@ export type Route =
   | 'analyze'
   | 'large-files'
   | 'duplicates'
-  | 'cleanup'
   | 'history'
   | 'settings'
-  | 'privacy'
-  | 'licensing';
+  | 'privacy';
 
 export type ViewMode = 'sunburst' | 'treemap' | 'list';
 export type GroupBy = 'none' | 'type' | 'folder';
@@ -125,18 +114,6 @@ export interface AppState {
     excludePaths: string[];
   };
 
-  cleanup: {
-    scanId: string | null;
-    findings: CleanupFinding[];
-    loading: boolean;
-    error: string | null;
-    preview: CleanupPreview | null;
-    executing: boolean;
-    result: CleanupResult | null;
-    recycleBin: RecycleBinSummary | null;
-    selectedFindingIds: string[];
-  };
-
   details: {
     path: string | null;
     data: FileDetails | null;
@@ -144,8 +121,6 @@ export interface AppState {
     error: string | null;
   };
 
-  entitlement: Entitlement;
-  entitlementEvents: EntitlementEvent[];
   settings: AppSettings | null;
   privacy: PrivacyReport | null;
   toasts: Toast[];
@@ -189,20 +164,7 @@ const initialState: AppState = {
     selectedPaths: [],
     excludePaths: [],
   },
-  cleanup: {
-    scanId: null,
-    findings: [],
-    loading: false,
-    error: null,
-    preview: null,
-    executing: false,
-    result: null,
-    recycleBin: null,
-    selectedFindingIds: [],
-  },
   details: { path: null, data: null, loading: false, error: null },
-  entitlement: freeEntitlement(),
-  entitlementEvents: [],
   settings: null,
   privacy: null,
   toasts: [],
@@ -242,21 +204,10 @@ type Action =
   | { type: 'duplicates-clear-selection' }
   | { type: 'duplicates-exclude-add'; path: string }
   | { type: 'duplicates-exclude-remove'; path: string }
-  | { type: 'cleanup-scan-id'; scanId: string | null }
-  | { type: 'cleanup-loading' }
-  | { type: 'cleanup-findings'; findings: CleanupFinding[] }
-  | { type: 'cleanup-error'; message: string }
-  | { type: 'cleanup-preview'; preview: CleanupPreview | null }
-  | { type: 'cleanup-executing' }
-  | { type: 'cleanup-result'; result: CleanupResult }
-  | { type: 'cleanup-recycle-bin'; summary: RecycleBinSummary }
-  | { type: 'cleanup-toggle-finding'; id: string }
   | { type: 'details-path'; path: string | null }
   | { type: 'details-loading' }
   | { type: 'details-data'; data: FileDetails }
   | { type: 'details-error'; message: string }
-  | { type: 'entitlement'; entitlement: Entitlement }
-  | { type: 'entitlement-events'; events: EntitlementEvent[] }
   | { type: 'settings'; settings: AppSettings }
   | { type: 'privacy'; report: PrivacyReport }
   | { type: 'toast-push'; toast: Toast }
@@ -304,7 +255,6 @@ function reducer(state: AppState, action: Action): AppState {
           activeScanId: result.scanId,
         },
         viz: { ...state.viz, focusPath: result.rootPath, selectedPath: null, listPath: result.rootPath },
-        cleanup: { ...state.cleanup, scanId: result.scanId, findings: [], preview: null, result: null },
         duplicates: { ...state.duplicates, report: null, options: null, selectedPaths: [] },
       };
     }
@@ -378,31 +328,6 @@ function reducer(state: AppState, action: Action): AppState {
           excludePaths: state.duplicates.excludePaths.filter((p) => p !== action.path),
         },
       };
-    case 'cleanup-scan-id':
-      return { ...state, cleanup: { ...state.cleanup, scanId: action.scanId } };
-    case 'cleanup-loading':
-      return { ...state, cleanup: { ...state.cleanup, loading: true, error: null } };
-    case 'cleanup-findings':
-      return { ...state, cleanup: { ...state.cleanup, loading: false, findings: action.findings } };
-    case 'cleanup-error':
-      return { ...state, cleanup: { ...state.cleanup, loading: false, error: action.message } };
-    case 'cleanup-preview':
-      return { ...state, cleanup: { ...state.cleanup, preview: action.preview } };
-    case 'cleanup-executing':
-      return { ...state, cleanup: { ...state.cleanup, executing: true } };
-    case 'cleanup-result':
-      return {
-        ...state,
-        cleanup: { ...state.cleanup, executing: false, result: action.result, preview: null, findings: [] },
-      };
-    case 'cleanup-recycle-bin':
-      return { ...state, cleanup: { ...state.cleanup, recycleBin: action.summary } };
-    case 'cleanup-toggle-finding': {
-      const selected = state.cleanup.selectedFindingIds.includes(action.id)
-        ? state.cleanup.selectedFindingIds.filter((id) => id !== action.id)
-        : [...state.cleanup.selectedFindingIds, action.id];
-      return { ...state, cleanup: { ...state.cleanup, selectedFindingIds: selected } };
-    }
     case 'details-path':
       return { ...state, details: { ...state.details, path: action.path, data: null, error: null } };
     case 'details-loading':
@@ -411,10 +336,6 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, details: { ...state.details, loading: false, data: action.data } };
     case 'details-error':
       return { ...state, details: { ...state.details, loading: false, error: action.message } };
-    case 'entitlement':
-      return { ...state, entitlement: action.entitlement };
-    case 'entitlement-events':
-      return { ...state, entitlementEvents: action.events };
     case 'settings':
       return { ...state, settings: action.settings };
     case 'privacy':
@@ -454,14 +375,6 @@ export interface AppActions {
   clearDuplicateSelection(): void;
   excludeDuplicatePath(path: string): void;
   removeDuplicateExclusion(path: string): void;
-  loadCleanup(): Promise<void>;
-  runCleanupScan(rules: CleanupRule[]): Promise<void>;
-  toggleCleanupFinding(id: string): void;
-  previewCleanup(plan: CleanupPlan): Promise<CleanupPreview | null>;
-  executeCleanup(plan: CleanupPlan): Promise<CleanupResult | null>;
-  refreshRecycleBin(): Promise<void>;
-  activateLicense(key: string): Promise<void>;
-  deactivateLicense(): Promise<void>;
   updateSettings(patch: Partial<AppSettings>): Promise<void>;
   toast(toast: Omit<Toast, 'id' | 'timeoutMs'> & { timeoutMs?: number }): void;
   dismissToast(id: string): void;
@@ -515,23 +428,19 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       }));
       if (cancelled) return;
 
-      const [drives, settings, entitlement, version, privacy, history, events] = await Promise.all([
+      const [drives, settings, version, privacy, history] = await Promise.all([
         transport.listDrives().catch(() => [] as DriveInfo[]),
         transport.settingsGet().catch(() => null),
-        transport.entitlementGet().catch(() => freeEntitlement()),
         transport.appVersion().catch(() => null),
         transport.privacyReport().catch(() => null),
         transport.scanList().catch(() => [] as ScanSummary[]),
-        transport.entitlementEvents().catch(() => [] as EntitlementEvent[]),
       ]);
       if (cancelled) return;
       dispatch({ type: 'drives', drives });
       if (settings) dispatch({ type: 'settings', settings });
-      dispatch({ type: 'entitlement', entitlement });
       if (version) dispatch({ type: 'app-version', version });
       if (privacy) dispatch({ type: 'privacy', report: privacy });
       dispatch({ type: 'scan-history', history });
-      if (events) dispatch({ type: 'entitlement-events', events });
       const system = drives.find((drive) => drive.isSystemDrive) ?? drives[0];
       if (system) dispatch({ type: 'select-drive', driveId: system.id });
     })().catch((error: unknown) => {
@@ -756,105 +665,6 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       clearDuplicateSelection: () => dispatch({ type: 'duplicates-clear-selection' }),
       excludeDuplicatePath: (path) => dispatch({ type: 'duplicates-exclude-add', path }),
       removeDuplicateExclusion: (path) => dispatch({ type: 'duplicates-exclude-remove', path }),
-
-      loadCleanup: async () => {
-        const scanId = stateRef.current.scan.result?.scanId ?? null;
-        dispatch({ type: 'cleanup-loading' });
-        dispatch({ type: 'cleanup-scan-id', scanId });
-        try {
-          const [findings, recycleBin] = await Promise.all([
-            requireTransport().cleanupScan(scanId ?? '', []).catch(() => [] as CleanupFinding[]),
-            requireTransport().recycleBinSummary().catch(() => null),
-          ]);
-          dispatch({ type: 'cleanup-findings', findings });
-          if (recycleBin) dispatch({ type: 'cleanup-recycle-bin', summary: recycleBin });
-        } catch (error) {
-          dispatch({ type: 'cleanup-error', message: describe(error) });
-        }
-      },
-
-      /** Re-analyses the scan with an explicit set of user-supplied rules. */
-      runCleanupScan: async (rules) => {
-        const scanId = stateRef.current.scan.result?.scanId ?? null;
-        if (!scanId) {
-          toast({ kind: 'warning', title: 'Scan a drive first', detail: 'Cleanup suggestions need scan results.' });
-          return;
-        }
-        dispatch({ type: 'cleanup-loading' });
-        dispatch({ type: 'cleanup-scan-id', scanId });
-        try {
-          const [findings, recycleBin] = await Promise.all([
-            requireTransport().cleanupScan(scanId, rules),
-            requireTransport().recycleBinSummary().catch(() => null),
-          ]);
-          dispatch({ type: 'cleanup-findings', findings });
-          if (recycleBin) dispatch({ type: 'cleanup-recycle-bin', summary: recycleBin });
-        } catch (error) {
-          dispatch({ type: 'cleanup-error', message: describe(error) });
-        }
-      },
-
-      toggleCleanupFinding: (id) => dispatch({ type: 'cleanup-toggle-finding', id }),
-
-      previewCleanup: async (plan) => {
-        try {
-          const preview = await requireTransport().cleanupPreview(plan);
-          dispatch({ type: 'cleanup-preview', preview });
-          return preview;
-        } catch (error) {
-          toast({ kind: 'error', title: 'Could not prepare the cleanup', detail: describe(error) });
-          return null;
-        }
-      },
-
-      executeCleanup: async (plan) => {
-        dispatch({ type: 'cleanup-executing' });
-        try {
-          const result = await requireTransport().cleanupExecute(plan);
-          dispatch({ type: 'cleanup-result', result });
-          toast({
-            kind: result.totalFailedCount > 0 ? 'warning' : 'success',
-            title: result.totalFailedCount > 0 ? 'Cleanup finished with errors' : 'Cleanup complete',
-            detail: `${result.totalRemovedCount} handled, ${result.totalFailedCount} failed.`,
-          });
-          return result;
-        } catch (error) {
-          dispatch({ type: 'cleanup-error', message: describe(error) });
-          toast({ kind: 'error', title: 'Cleanup failed', detail: describe(error) });
-          return null;
-        }
-      },
-
-      refreshRecycleBin: async () => {
-        try {
-          dispatch({ type: 'cleanup-recycle-bin', summary: await requireTransport().recycleBinSummary() });
-        } catch {
-          /* the platform may not expose the Recycle Bin; stay silent */
-        }
-      },
-
-      activateLicense: async (key) => {
-        try {
-          const entitlement = await requireTransport().licenseActivate(key);
-          dispatch({ type: 'entitlement', entitlement });
-          toast({
-            kind: entitlement.state === 'invalid' ? 'error' : 'success',
-            title: entitlement.state === 'invalid' ? 'License not valid' : 'Diskora Pro activated',
-            detail: entitlement.reason ?? 'Thank you for supporting Diskora.',
-          });
-        } catch (error) {
-          toast({ kind: 'error', title: 'Activation failed', detail: describe(error) });
-        }
-      },
-
-      deactivateLicense: async () => {
-        try {
-          dispatch({ type: 'entitlement', entitlement: await requireTransport().licenseDeactivate() });
-          toast({ kind: 'info', title: 'License deactivated' });
-        } catch (error) {
-          toast({ kind: 'error', title: 'Could not deactivate', detail: describe(error) });
-        }
-      },
 
       updateSettings: async (patch) => {
         const previous = stateRef.current.settings;

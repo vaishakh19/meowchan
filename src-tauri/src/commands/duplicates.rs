@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use tauri::{Emitter, Manager, State};
 
-use crate::config::product::DEFAULT_CONFIG;
 use crate::duplicates::grouping::{self, DuplicateOptions, DuplicateReport};
 use crate::duplicates::verify::verify_identical;
 use crate::error::{AppError, AppResult};
@@ -40,12 +39,10 @@ pub async fn find_duplicates(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<String> {
-    crate::authz::authorize_state(&state, crate::authz::Permission::BasicDuplicates)?;
 
     // The free tier gets the first N duplicate groups, largest first, and is told so. Everything
     // past the limit needs `UnlimitedDuplicates`, which the authorization layer enforces. The
     // limit is applied here, in the backend, so a modified interface cannot ask for more.
-    let authorization = state.authorization()?;
     let scans = state.scans()?;
     let entry = scans
         .get(&options.scan_id)
@@ -58,9 +55,9 @@ pub async fn find_duplicates(
         .clone()
         .ok_or_else(|| AppError::NotFound("The scan is still running.".to_string()))?;
 
-    let report_id = format!("dup-{}", crate::licensing::verify::now_millis());
-    let started_at = crate::licensing::verify::now_millis();
-    let group_limit = free_group_limit(&authorization);
+    let report_id = format!("dup-{}", crate::time::now_millis());
+    let started_at = crate::time::now_millis();
+
 
     // Mark the scan as running so the UI can show progress before the first event arrives.
     {
@@ -127,7 +124,7 @@ pub async fn find_duplicates(
             elapsed_ms: started.elapsed().as_millis() as u64,
             eta_ms: None,
         };
-        let report = grouping::limit_groups(report, group_limit);
+        let report = report;
         let state = progress_app.state::<AppState>();
         if let Ok(mut registry) = state.duplicate_reports.lock() {
             registry.insert(progress_id, report);
@@ -141,7 +138,6 @@ pub async fn find_duplicates(
 /// Returns a finished report, or `None` when it is unknown or still running.
 #[tauri::command]
 pub fn duplicates_get(report_id: String, state: State<'_, AppState>) -> AppResult<Option<DuplicateReport>> {
-    crate::authz::authorize_state(&state, crate::authz::Permission::BasicDuplicates)?;
     let registry = state
         .duplicate_reports
         .lock()
@@ -164,14 +160,6 @@ pub fn verify_duplicates(path_a: String, path_b: String) -> AppResult<crate::dup
     )
     .map_err(|error| AppError::io(&path_a, &error))?;
     Ok(result)
-}
-
-/// `None` means unlimited; otherwise the free tier's group cap.
-fn free_group_limit(authorization: &crate::authz::Authorization) -> Option<usize> {
-    if crate::authz::authorize(authorization, crate::authz::Permission::UnlimitedDuplicates).is_ok() {
-        return None;
-    }
-    Some(DEFAULT_CONFIG.free_duplicate_group_limit as usize)
 }
 
 #[cfg(test)]

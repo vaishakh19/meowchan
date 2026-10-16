@@ -7,7 +7,7 @@
  */
 
 import { useMemo } from 'react';
-import { Crosshair, Copy, ExternalLink, FolderOpen, Info, ShieldCheck, Trash2 } from 'lucide-react';
+import { Crosshair, Copy, ExternalLink, FolderOpen, Info, ShieldCheck } from 'lucide-react';
 import { Badge, Button, EmptyState, Panel, SectionTitle, Skeleton, cx } from '@/components/ui/primitives';
 import { FileIcon } from '@/lib/icons';
 import { categoryColor, categoryLabel } from '@/lib/categories';
@@ -214,38 +214,10 @@ export function DetailsPanel(): React.JSX.Element {
             </Panel>
           ) : null}
 
-          {/* ---------------- cleanup review ---------------- */}
-          {!synthetic ? (
-            <Panel className="p-2.5">
-              <SectionTitle className="px-0 pt-0 pb-1">Cleanup review</SectionTitle>
-              <p className="mb-2 text-[11px] leading-relaxed text-ink-muted">
-                Add this item to the cleanup assistant to review it with everything else. Nothing is
-                removed until you confirm the exact paths.
-              </p>
-              <Button
-                size="sm"
-                className="w-full justify-center"
-                onClick={() => {
-                  actions.navigate('cleanup');
-                  actions.toast({
-                    kind: 'info',
-                    title: 'Added to review',
-                    detail: viz.selectedPath ?? undefined,
-                    timeoutMs: 3500,
-                  });
-                }}
-              >
-                <Trash2 aria-hidden className="size-3" />
-                Add to cleanup review
-              </Button>
-            </Panel>
-          ) : null}
-
           <Panel className="flex items-start gap-2 p-2.5">
             <ShieldCheck aria-hidden className="mt-px size-3.5 shrink-0 text-ok" />
             <p className="text-[10px] leading-relaxed text-ink-muted">
-              Diskora never deletes anything because you selected it. Every removal goes through the
-              cleanup assistant with an explicit confirmation and prefers the Recycle Bin.
+              Diskora does not delete or move files. Use Reveal in File Explorer to manage your files manually.
             </p>
           </Panel>
         </>

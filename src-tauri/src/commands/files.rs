@@ -39,7 +39,6 @@ pub struct FileDetails {
 /// Reads details for a single path. Folder totals come from the live scan index when available.
 #[tauri::command]
 pub fn file_details(path: String, state: State<'_, AppState>) -> AppResult<FileDetails> {
-    crate::authz::authorize_state(&state, crate::authz::Permission::FileInspection)?;
     let candidate = PathBuf::from(&path);
     if path.trim().is_empty() {
         return Err(AppError::InvalidArgument("No path was provided.".to_string()));

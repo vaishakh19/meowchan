@@ -18,7 +18,7 @@
         "minWidth": 960,
         "minHeight": 640,
         "resizable": true,
-        "decorations": false,
+        "decorations": true,
         "transparent": false,
         "center": true,
         "dragDropEnabled": false
@@ -38,7 +38,7 @@
     ],
     "category": "Utility",
     "shortDescription": "Local-first disk space analyzer",
-    "longDescription": "Diskora maps disk usage with a real sunburst and treemap, finds large files and true duplicates, and explains every cleanup suggestion before anything is moved.",
+    "longDescription": "Diskora analyzes local disk usage with sunburst, treemap and file-list views, large-file search and content-based duplicate detection. It does not delete files.",
     "publisher": "Diskora",
     "copyright": "",
     "icon": [

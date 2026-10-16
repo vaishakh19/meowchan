@@ -20,11 +20,9 @@ import { ItemMenuProvider } from './itemMenu';
 import { AnalyzeView } from '@/features/scanner/AnalyzeView';
 import { LargeFilesView } from '@/features/scanner/LargeFilesView';
 import { DuplicatesView } from '@/features/duplicates/DuplicatesView';
-import { CleanupView } from '@/features/cleanup/CleanupView';
 import { HistoryView } from '@/features/scanner/HistoryView';
 import { SettingsView } from '@/features/settings/SettingsView';
 import { PrivacyView } from '@/features/settings/PrivacyView';
-import { LicensingView } from '@/features/licensing/LicensingView';
 import { HomeView } from '@/features/scanner/HomeView';
 
 export function App(): React.JSX.Element {
@@ -66,11 +64,9 @@ function Shell(): React.JSX.Element {
           {state.route === 'analyze' ? <AnalyzeView /> : null}
           {state.route === 'large-files' ? <LargeFilesView /> : null}
           {state.route === 'duplicates' ? <DuplicatesView /> : null}
-          {state.route === 'cleanup' ? <CleanupView /> : null}
           {state.route === 'history' ? <HistoryView /> : null}
           {state.route === 'settings' ? <SettingsView /> : null}
           {state.route === 'privacy' ? <PrivacyView /> : null}
-          {state.route === 'licensing' ? <LicensingView /> : null}
         </main>
         <DetailsPanel />
       </div>

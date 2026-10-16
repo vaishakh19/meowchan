@@ -29,7 +29,6 @@ pub async fn scan_start(
 ) -> AppResult<String> {
     // Scanning is free at every tier and is never gated. The call is still made so that the
     // permission catalogue is exercised on this path and the audit trail shows it was checked.
-    crate::authz::authorize_state(&state, crate::authz::Permission::CoreAnalysis)?;
 
     let root = options.root_path.trim().to_string();
     if root.is_empty() {
@@ -58,7 +57,7 @@ pub async fn scan_start(
 
     let scan_id = format!(
         "scan-{}-{}",
-        crate::licensing::verify::now_millis(),
+        crate::time::now_millis(),
         std::process::id()
     );
 
@@ -87,7 +86,7 @@ pub async fn scan_start(
         registry.insert(scan_id.clone(), Arc::clone(&cancel_flag));
     }
 
-    let started_at = crate::licensing::verify::now_millis();
+    let started_at = crate::time::now_millis();
     let root_name = walker::volume_name(&root_path);
 
     // The walk itself, on a blocking thread so the async runtime stays free.
@@ -243,7 +242,7 @@ pub async fn scan_cancel(scan_id: String, state: State<'_, AppState>) -> AppResu
         if let Some(entry) = scans.get(&scan_id) {
             let mut updated = (**entry).clone();
             updated.status = "cancelled".to_string();
-            updated.finished_at = Some(crate::licensing::verify::now_millis());
+            updated.finished_at = Some(crate::time::now_millis());
             scans.insert(scan_id, Arc::new(updated));
         }
     }
@@ -253,7 +252,6 @@ pub async fn scan_cancel(scan_id: String, state: State<'_, AppState>) -> AppResu
 /// Returns the full result for a finished scan, or `None` when it is unknown.
 #[tauri::command]
 pub fn scan_get(scan_id: String, state: State<'_, AppState>) -> AppResult<Option<ScanResult>> {
-    crate::authz::authorize_state(&state, crate::authz::Permission::CoreAnalysis)?;
     let scans = state.scans()?;
     let entry = match scans.get(&scan_id) {
         Some(entry) => entry,

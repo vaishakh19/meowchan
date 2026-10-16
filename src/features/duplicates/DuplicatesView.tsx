@@ -11,25 +11,21 @@
  * retained.
  */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Copy, FolderOpen, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useApp } from '@/app/state';
 import { useItemMenu } from '@/app/itemMenu';
 import {
   Badge,
   Button,
-  Checkbox,
   EmptyState,
   ErrorState,
-  Notice,
   Panel,
   ProgressBar,
   SectionTitle,
   cx,
 } from '@/components/ui/primitives';
-import { Modal } from '@/components/ui/feedback';
 import { formatBytes, formatCount, formatDateTime, formatRelativeTime } from '@/lib/format';
-import { applyDuplicateLimit } from '@/features/licensing/entitlements';
 import type { DuplicateGroup } from '@/types/contracts';
 
 const MB = 1024 * 1024;
@@ -37,31 +33,13 @@ const MB = 1024 * 1024;
 export function DuplicatesView(): React.JSX.Element {
   const { state, actions } = useApp();
   const itemMenu = useItemMenu();
-  const { duplicates, scan, entitlement } = state;
+  const { duplicates, scan } = state;
 
   const [minBytes, setMinBytes] = useState(1 * MB);
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const hasScan = scan.result !== null;
   const report = duplicates.report;
-  const limit = entitlement.duplicateGroupLimit;
-  const limited = useMemo(
-    () => (report ? applyDuplicateLimit(report.groups, limit) : { groups: [], limited: false }),
-    [report, limit],
-  );
-
-  const selectedBytes = useMemo(() => {
-    if (!report) return 0;
-    let total = 0;
-    for (const group of report.groups) {
-      for (const copy of group.copies) {
-        if (state.duplicates.selectedPaths.includes(copy.path)) total += copy.sizeBytes;
-      }
-    }
-    return total;
-  }, [report, state.duplicates.selectedPaths]);
-
   if (!hasScan) {
     return (
       <div className="flex h-full flex-col" data-testid="duplicates-view">
@@ -104,19 +82,7 @@ export function DuplicatesView(): React.JSX.Element {
           <Copy aria-hidden className="size-3.5" />
           {report ? 'Scan again' : 'Find duplicates'}
         </Button>
-        {state.duplicates.selectedPaths.length > 0 ? (
-          <>
-            <span className="dw-tnum text-[11px] text-ink-muted">
-              {formatCount(state.duplicates.selectedPaths.length)} copies selected · {formatBytes(selectedBytes)}
-            </span>
-            <Button size="sm" variant="ghost" onClick={actions.clearDuplicateSelection}>
-              Clear selection
-            </Button>
-            <Button size="sm" onClick={() => setConfirmOpen(true)}>
-              Review for cleanup…
-            </Button>
-          </>
-        ) : null}
+
       </div>
 
       {/* ------------------------------ progress ------------------------------ */}
@@ -165,25 +131,13 @@ export function DuplicatesView(): React.JSX.Element {
             {report.errors.length > 0 ? <Stat label="Unreadable" value={formatCount(report.errors.length)} /> : null}
           </Panel>
 
-          {limited.limited ? (
-            <Notice tone="warn" title="Free plan preview" className="mb-2">
-              Showing the first {formatCount(limit)} of {formatCount(report.totalGroups)} groups. Diskora Pro
-              unlocks every group plus batch review and byte-for-byte verification.{' '}
-              <button type="button" className="underline" onClick={() => actions.navigate('licensing')}>
-                Compare plans
-              </button>
-            </Notice>
-          ) : null}
-
           <ul className="flex flex-col gap-2">
-            {limited.groups.map((group) => (
+            {report.groups.map((group) => (
               <GroupCard
                 key={group.groupId}
                 group={group}
                 expanded={expanded === group.groupId}
                 onToggle={() => setExpanded(expanded === group.groupId ? null : group.groupId)}
-                selectedPaths={state.duplicates.selectedPaths}
-                onTogglePath={actions.toggleDuplicatePath}
                 onReveal={(path) => void actions.reveal(path)}
                 onExclude={(path) => actions.excludeDuplicatePath(path)}
                 onContextMenu={(path, x, y) => itemMenu.open(path, x, y, 'file')}
@@ -216,45 +170,7 @@ export function DuplicatesView(): React.JSX.Element {
         </div>
       ) : null}
 
-      <Modal
-        open={confirmOpen}
-        title="Review duplicate copies"
-        description="Nothing has been deleted. These copies are handed to the cleanup assistant, which asks for a final confirmation and prefers the Recycle Bin."
-        onClose={() => setConfirmOpen(false)}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setConfirmOpen(false);
-                actions.navigate('cleanup');
-                actions.toast({
-                  kind: 'info',
-                  title: 'Copies queued for review',
-                  detail: `${formatCount(state.duplicates.selectedPaths.length)} copies · ${formatBytes(selectedBytes)}`,
-                });
-              }}
-            >
-              Continue to cleanup review
-            </Button>
-          </>
-        }
-      >
-        <ul className="flex flex-col gap-1">
-          {state.duplicates.selectedPaths.map((path) => (
-            <li key={path} className="truncate font-mono text-[11px] text-ink-muted" title={path}>
-              {path}
-            </li>
-          ))}
-        </ul>
-        <Notice tone="warn" className="mt-2">
-          At least one copy of every group is always kept. Diskora never offers the only remaining
-          copy of a file for removal.
-        </Notice>
-      </Modal>
+
     </div>
   );
 }
@@ -263,8 +179,6 @@ function GroupCard({
   group,
   expanded,
   onToggle,
-  selectedPaths,
-  onTogglePath,
   onReveal,
   onExclude,
   onContextMenu,
@@ -272,15 +186,10 @@ function GroupCard({
   group: DuplicateGroup;
   expanded: boolean;
   onToggle: () => void;
-  selectedPaths: string[];
-  onTogglePath: (path: string) => void;
   onReveal: (path: string) => void;
   onExclude: (path: string) => void;
   onContextMenu: (path: string, x: number, y: number) => void;
 }): React.JSX.Element {
-  const selectedInGroup = group.copies.filter((copy) => selectedPaths.includes(copy.path)).length;
-  // Never allow every copy in a group to be selected for removal.
-  const blockAll = selectedInGroup === group.copies.length;
 
   return (
     <li>
@@ -308,7 +217,6 @@ function GroupCard({
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-surface-sunken text-[10px] uppercase tracking-wide text-ink-faint">
-                  <th className="px-2.5 py-1 font-semibold">Keep</th>
                   <th className="px-2.5 py-1 font-semibold">Path</th>
                   <th className="px-2.5 py-1 font-semibold">Modified</th>
                   <th className="px-2.5 py-1 font-semibold" />
@@ -316,24 +224,15 @@ function GroupCard({
               </thead>
               <tbody>
                 {group.copies.map((copy) => {
-                  const selected = selectedPaths.includes(copy.path);
                   return (
                     <tr
                       key={copy.path}
-                      className={cx('border-t border-line/60', selected && 'bg-info-soft')}
+                      className="border-t border-line/60"
                       onContextMenu={(event) => {
                         event.preventDefault();
                         onContextMenu(copy.path, event.clientX, event.clientY);
                       }}
                     >
-                      <td className="px-2.5 py-1.5">
-                        <Checkbox
-                          checked={selected}
-                          disabled={blockAll && !selected}
-                          onChange={() => onTogglePath(copy.path)}
-                          label={<span className="sr-only">Select {copy.path} for cleanup review</span>}
-                        />
-                      </td>
                       <td className="px-2.5 py-1.5">
                         <p className="truncate font-mono text-[11px] text-ink" title={copy.path}>
                           {copy.path}
@@ -365,12 +264,7 @@ function GroupCard({
                 })}
               </tbody>
             </table>
-            {blockAll ? (
-              <p className="border-t border-line bg-warn-soft px-2.5 py-1.5 text-[10px] text-warn">
-                Every copy is selected — at least one must be kept, so removal is disabled until you
-                deselect one.
-              </p>
-            ) : null}
+
           </div>
         ) : null}
       </Panel>
@@ -392,7 +286,7 @@ function Header(): React.JSX.Element {
     <header className="border-b border-line bg-surface px-3 py-2">
       <h1 className="text-[13px] font-semibold text-ink">Duplicate finder</h1>
       <p className="mt-0.5 text-[10px] text-ink-faint">
-        Size → SHA-256 → optional byte-for-byte verification. Filenames are never treated as evidence.
+        Size and SHA-256 content matching. No files are deleted.
       </p>
     </header>
   );

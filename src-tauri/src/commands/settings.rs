@@ -71,55 +71,10 @@ pub fn settings_update(
         for (key, value) in object {
             match key.as_str() {
                 "theme" => current.theme = value.as_str().unwrap_or("system").to_string(),
-                "defaultScanRoot" => {
-                    current.default_scan_root = value.as_str().map(|value| value.to_string())
-                }
                 "maxChildrenPerNode" => {
                     current.max_children_per_node = value.as_u64().unwrap_or(100) as u32
                 }
                 "followLinks" => current.follow_links = value.as_bool().unwrap_or(false),
-                "confirmBeforeCleanup" => {
-                    current.confirm_before_cleanup = value.as_bool().unwrap_or(true)
-                }
-                "preferRecycleBin" => current.prefer_recycle_bin = value.as_bool().unwrap_or(true),
-                "largeUnusedDays" => current.large_unused_days = value.as_u64().unwrap_or(180) as u32,
-                "cachePaths" => {
-                    current.cache_paths = value
-                        .as_array()
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                }
-                "tempPaths" => {
-                    current.temp_paths = value
-                        .as_array()
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                }
-                "excludePaths" => {
-                    current.exclude_paths = value
-                        .as_array()
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                }
-                "crashReporting" => current.crash_reporting = value.as_bool().unwrap_or(false),
-                "duplicateGroupLimit" => {
-                    current.duplicate_group_limit = value.as_u64().unwrap_or(25) as u32
-                }
                 _ => {}
             }
         }
@@ -159,32 +114,12 @@ pub fn privacy_report(state: State<'_, AppState>) -> AppResult<PrivacyReport> {
         }
     };
 
-    let settings = settings_get(state)?;
 
-    let mut local_storage = vec![
-        "Your preferences (theme, scan defaults, cleanup rules, never-touch paths).".to_string(),
-        "A short summary of each scan: root path, size, file and folder counts, duration, status."
-            .to_string(),
-        "A cached copy of your licence and its entitlement events.".to_string(),
-    ];
-    if settings.crash_reporting {
-        local_storage.push(
-            "Anonymous crash reports are enabled. They contain a stack trace and the app version only."
-                .to_string(),
-        );
-    }
 
-    let network_activity = if settings.crash_reporting {
-        vec![
-            "Anonymous crash reports: a stack trace and the app version. No file paths, no file names, no scan results.".to_string(),
-        ]
-    } else {
-        vec![]
-    };
 
     Ok(PrivacyReport {
-        local_storage,
-        network_activity,
+        local_storage: vec!["Preferences and scan summaries, stored locally.".to_string()],
+        network_activity: vec![],
         data_dir,
         database_path,
     })
@@ -223,14 +158,6 @@ mod tests {
         }
         assert_eq!(settings.theme, "dark");
         assert!(settings.follow_links, "an unrelated field is untouched");
-    }
-
-    #[test]
-    fn privacy_reports_are_honest_about_crash_reporting() {
-        let mut settings = AppSettings::default();
-        assert!(!settings.crash_reporting);
-        settings.crash_reporting = true;
-        assert!(settings.crash_reporting);
     }
 
     #[test]
