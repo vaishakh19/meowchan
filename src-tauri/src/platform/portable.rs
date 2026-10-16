@@ -44,14 +44,6 @@ pub struct VolumeInfo {
     pub read_only: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct RecycleBinInfo {
-    pub item_count: u64,
-    pub size_bytes: u64,
-    pub supported: bool,
-    pub detail: String,
-}
-
 pub fn list_volumes() -> Vec<VolumeInfo> {
     Vec::new()
 }
@@ -71,15 +63,6 @@ pub fn is_system_drive(_path: &Path) -> bool {
 
 pub fn disk_size(_path: &Path) -> Option<u64> {
     None
-}
-
-pub fn recycle_bin(_drive_root: Option<&str>) -> RecycleBinInfo {
-    RecycleBinInfo {
-        item_count: 0,
-        size_bytes: 0,
-        supported: false,
-        detail: "The Recycle Bin is only available on Windows.".to_string(),
-    }
 }
 
 pub fn open_with_default_app(_path: &Path) -> Result<(), String> {

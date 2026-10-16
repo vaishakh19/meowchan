@@ -50,16 +50,6 @@ extern "system" {
         lpDirectory: *const u16,
         nShowCmd: i32,
     ) -> *mut c_void;
-    fn SHQueryRecycleBinW(pszRootPath: *const u16, pSHQueryRBInfo: *mut ShQueryRbInfo) -> i32;
-}
-
-/// `SHQUERYRBINFOW`.
-#[repr(C)]
-#[derive(Default)]
-struct ShQueryRbInfo {
-    cb_size: u32,
-    i64_size: u64,
-    i64_num_items: u64,
 }
 
 const DRIVE_UNKNOWN: u32 = 0;
@@ -266,50 +256,6 @@ pub fn disk_size(path: &Path) -> Option<u64> {
         return None;
     }
     Some((high as u64) << 32 | low as u64)
-}
-
-/* -------------------------------- Recycle Bin -------------------------------- */
-
-#[derive(Debug, Clone)]
-pub struct RecycleBinInfo {
-    pub item_count: u64,
-    pub size_bytes: u64,
-    pub supported: bool,
-    pub detail: String,
-}
-
-/// Queries the shell Recycle Bin for a drive root (`C:\`) or the whole machine (`None`).
-pub fn recycle_bin(drive_root: Option<&str>) -> RecycleBinInfo {
-    let wide_root: Vec<u16> = match drive_root {
-        Some(root) => wide(Path::new(root)),
-        None => wide_str(""),
-    };
-
-    let mut info = ShQueryRbInfo {
-        cb_size: std::mem::size_of::<ShQueryRbInfo>() as u32,
-        i64_size: 0,
-        i64_num_items: 0,
-    };
-    // SAFETY: `info` is correctly sized and lives for the duration of the call.
-    let hr = unsafe { SHQueryRecycleBinW(if drive_root.is_some() { wide_root.as_ptr() } else { std::ptr::null() }, &mut info as *mut ShQueryRbInfo) };
-    if hr < 0 {
-        return RecycleBinInfo {
-            item_count: 0,
-            size_bytes: 0,
-            supported: false,
-            detail: "Windows did not report the Recycle Bin contents for this volume.".to_string(),
-        };
-    }
-
-    RecycleBinInfo {
-        item_count: info.i64_num_items,
-        size_bytes: info.i64_size,
-        supported: true,
-        detail: format!(
-            "{} item(s), {} bytes reported by the Windows shell.",
-            info.i64_num_items, info.i64_size
-        ),
-    }
 }
 
 /* --------------------------------- open path -------------------------------- */

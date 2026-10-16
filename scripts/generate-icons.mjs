@@ -203,9 +203,34 @@ function encodePng(size) {
   ]);
 }
 
-/** Minimal BMP-free ICO container: embeds PNGs, which Windows 7+ supports directly. */
+// Windows RC.EXE requires DIB icon entries, not PNGs for every small icon.
+function encodeDib(size) {
+  const maskStride = Math.ceil(size / 32) * 4;
+  const bitmap = Buffer.alloc(40 + size * size * 4 + maskStride * size);
+  bitmap.writeUInt32LE(40, 0);
+  bitmap.writeInt32LE(size, 4);
+  bitmap.writeInt32LE(size * 2, 8); // color image + 1-bit AND mask
+  bitmap.writeUInt16LE(1, 12);
+  bitmap.writeUInt16LE(32, 14);
+  bitmap.writeUInt32LE(size * size * 4, 20);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const source = (Math.floor(y * SIZE / size) * SIZE + Math.floor(x * SIZE / size)) * 4;
+      const dest = 40 + ((size - 1 - y) * size + x) * 4;
+      bitmap[dest] = pixels[source + 2];
+      bitmap[dest + 1] = pixels[source + 1];
+      bitmap[dest + 2] = pixels[source];
+      bitmap[dest + 3] = pixels[source + 3];
+      if (pixels[source + 3] === 0) {
+        bitmap[40 + size * size * 4 + (size - 1 - y) * maskStride + (x >> 3)] |= 0x80 >> (x % 8);
+      }
+    }
+  }
+  return bitmap;
+}
+
 function encodeIco(sizes) {
-  const images = sizes.map((size) => ({ size, data: encodePng(size) }));
+  const images = sizes.map((size) => ({ size, data: encodeDib(size) }));
   const header = Buffer.alloc(6);
   header.writeUInt16LE(0, 0); // reserved
   header.writeUInt16LE(1, 2); // type: icon
@@ -241,7 +266,6 @@ const outputs = [
   ['128x128@2x.png', encodePng(256)],
   ['icon.png', encodePng(512)],
   ['icon.ico', encodeIco([16, 24, 32, 48, 64, 128, 256])],
-  ['icon.icns', encodePng(512)],
 ];
 
 for (const [name, data] of outputs) {

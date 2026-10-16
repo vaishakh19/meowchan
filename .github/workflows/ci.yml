@@ -27,6 +27,7 @@ jobs:
       - name: Native tests
         shell: pwsh
         run: |
+          $env:CARGO_TERM_COLOR = "never"
           cmd /c "npm run rust:test -- --target x86_64-pc-windows-msvc > native.log 2>&1"
           $code = $LASTEXITCODE
           Get-Content native.log

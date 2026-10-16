@@ -45,6 +45,8 @@ pub async fn scan_start(
     // Honour the user's settings unless the caller explicitly overrode them.
     let mut options = options;
     options.root_path = root.clone();
+    // The minimal analyzer does not follow links out of the selected tree.
+    options.follow_links = false;
     // A zero means "use the user's preference", never "scan nothing".
     if options.max_children_per_node == 0 {
         options.max_children_per_node = settings.max_children_per_node;
