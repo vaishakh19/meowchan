@@ -9,6 +9,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-2022
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,11 +22,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
       - run: npm ci
       - name: Native tests
         shell: pwsh
         run: |
-          cmd /c "npm run rust:test > native.log 2>&1"
+          cmd /c "npm run rust:test -- --target x86_64-pc-windows-msvc > native.log 2>&1"
           $code = $LASTEXITCODE
           Get-Content native.log
           if ($code -ne 0) {

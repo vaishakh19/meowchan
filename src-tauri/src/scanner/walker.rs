@@ -46,7 +46,7 @@ impl Default for ScanOptions {
             follow_links: false,
             include_hidden: true,
             include_system: true,
-            max_entries: 0,
+            max_entries: 1_000_000,
             max_children_per_node: 100,
             compute_hashes: false,
         }
@@ -263,7 +263,7 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
     }
 
     run.cancelled = counters.is_cancelled();
-    run.hit_limit = run.cancelled;
+    run.hit_limit = run.cancelled || run.errors.iter().any(|error| error.kind == "limit-exceeded");
     run.elapsed_ms = started.elapsed().as_millis() as u64;
     run
 }

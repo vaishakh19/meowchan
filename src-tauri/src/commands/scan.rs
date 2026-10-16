@@ -76,6 +76,9 @@ pub async fn scan_start(
             .counters
             .lock()
             .map_err(|_| AppError::Internal("The counter lock was poisoned.".to_string()))?;
+        if !registry.is_empty() {
+            return Err(AppError::InvalidArgument("A scan is already running. Cancel it or wait for it to finish.".to_string()));
+        }
         registry.insert(scan_id.clone(), Arc::clone(&counters));
     }
     {

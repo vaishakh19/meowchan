@@ -240,6 +240,7 @@ function reducer(state: AppState, action: Action): AppState {
         },
       };
     case 'scan-progress':
+      if (action.progress.scanId !== state.scan.activeScanId) return state;
       return { ...state, scan: { ...state.scan, progress: action.progress } };
     case 'scan-result': {
       const { result } = action;
@@ -653,7 +654,9 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
               }
               return;
             }
-            window.setTimeout(() => void poll(), 250);
+            window.setTimeout(() => void poll().catch(error => {
+              dispatch({ type: 'duplicates-error', message: describe(error) });
+            }), 250);
           };
           await poll();
         } catch (error) {
@@ -685,31 +688,31 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
     };
   }, [toast]);
 
-  /* --------------------- scan completion (result fetch) --------------------- */
-  // Progress arrives as events; the final tree is fetched once the phase is terminal so the
-  // event payload stays small no matter how large the scan was.
+  // Poll results as well as receiving progress. Very short scans can finish before
+  // scanStart's IPC response arrives; relying solely on a final event loses that race.
   useEffect(() => {
-    const { scanning, activeScanId, progress } = state.scan;
-    if (!scanning || !activeScanId || !progress) return;
-    if (!['done', 'cancelled', 'error'].includes(progress.phase)) return;
+    const { scanning, activeScanId } = state.scan;
     const transport = transportRef.current;
-    if (!transport) return;
+    if (!scanning || !activeScanId || !transport) return;
     let cancelled = false;
-    void (async () => {
-      const result = await transport.scanGet(activeScanId).catch(() => null);
-      if (cancelled) return;
-      if (result) {
+    let busy = false;
+    const poll = async () => {
+      if (busy || cancelled) return;
+      busy = true;
+      try {
+        const result = await transport.scanGet(activeScanId);
+        if (cancelled || !result) return;
         dispatch({ type: 'scan-result', result });
-        const history = await transport.scanList().catch(() => [] as ScanSummary[]);
+        const history = await transport.scanList();
         if (!cancelled) dispatch({ type: 'scan-history', history });
-      } else {
-        dispatch({ type: 'scan-error', message: 'The scan finished but its result could not be read.' });
-      }
-    })();
-    return () => {
-      cancelled = true;
+      } catch (error) {
+        if (!cancelled) dispatch({ type: 'scan-error', message: describe(error) });
+      } finally { busy = false; }
     };
-  }, [state.scan.scanning, state.scan.activeScanId, state.scan.progress]);
+    void poll();
+    const timer = window.setInterval(() => void poll(), 250);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [state.scan.scanning, state.scan.activeScanId]);
 
   const value = useMemo<AppContextValue>(
     () => ({ state, actions, transport: transportRef.current }),
