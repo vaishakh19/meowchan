@@ -71,7 +71,10 @@ mod tests {
         // these references break here instead of inside the handler macro.
         assert!(licensing::normalize_key("ABCD").is_some());
         assert!(licensing::normalize_key("   ").is_none());
-        assert!(!licensing::mask_key("ABCD-1234").contains("1234"));
+        // The middle of a key is hidden; only its ends are shown.
+        assert_eq!(licensing::mask_key("ABCD-1234-EFGH-5678"), "ABCD…5678");
+        assert!(!licensing::mask_key("ABCD-1234-EFGH-5678").contains("EFGH"));
+        assert!(!licensing::mask_key("ABCD-1234-EFGH-5678").contains("1234"));
     }
 
     #[test]

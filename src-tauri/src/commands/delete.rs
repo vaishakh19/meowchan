@@ -382,8 +382,12 @@ fn protected_location(target: &Path) -> Option<&'static str> {
     if components.is_empty() {
         return Some("the volume root");
     }
-    // Per-volume system locations are protected on every drive.
-    if components.len() == 1 && VOLUME_LOCATIONS.contains(&components[0].as_str()) {
+    // Per-volume system locations are protected on every drive,
+    // together with everything inside them: the shell owns these
+    // trees (bin contents, restore points, recovery images), so
+    // protecting only the folder itself would let a caller delete
+    // through its children instead.
+    if VOLUME_LOCATIONS.contains(&components[0].as_str()) {
         return Some(match components[0].as_str() {
             "$recycle.bin" => "$Recycle.Bin",
             "system volume information" => "System Volume Information",
@@ -527,9 +531,14 @@ mod tests {
             guard_structure(Path::new("D:\\System Volume Information"), Path::new("D:\\")),
             Err(DeletionGuard::Protected("System Volume Information"))
         );
+        // The whole tree is protected, not just the folder itself.
         assert_eq!(
             guard_structure(Path::new("D:\\$Recycle.Bin\\S-1-5-21\\file.txt"), Path::new("D:\\")),
-            Ok(())
+            Err(DeletionGuard::Protected("$Recycle.Bin"))
+        );
+        assert_eq!(
+            guard_structure(Path::new("D:\\Recovery\\ReCustomization.dat"), Path::new("D:\\")),
+            Err(DeletionGuard::Protected("Recovery"))
         );
         // A data drive's ordinary folders are the user's business.
         assert_eq!(
