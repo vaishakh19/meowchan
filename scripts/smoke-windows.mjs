@@ -16,7 +16,9 @@ const executable = process.argv[2] ? resolve(process.argv[2]) : join(directory, 
 if (!process.argv[2]) copyFileSync(resolve('release/Diskora.exe'), executable);
 const app = spawn(executable, [], { cwd: directory, env: {
   ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9222',
-}, stdio: 'ignore' });
+}, stdio: ['ignore', 'pipe', 'pipe'] });
+let output = '';
+for (const stream of [app.stdout, app.stderr]) stream.on('data', data => { output = (output + data).slice(-6000); });
 let socket;
 const pending = new Map();
 const errors = [];
@@ -26,7 +28,7 @@ async function until(action, label, timeout = 60000) {
   let error;
   while (Date.now() < deadline) {
     try { const value = await action(); if (value) return value; } catch (cause) { error = cause; }
-    if (app.exitCode !== null) throw new Error(`Application exited with ${app.exitCode}`);
+    if (app.exitCode !== null) throw new Error(`Application exited with ${app.exitCode} while waiting for ${label}: ${output}`);
     await pause(200);
   }
   throw new Error(`Timed out: ${label}${error ? ` (${error.message})` : ''}`);
@@ -72,12 +74,21 @@ try {
   // Replace ONLY the native file picker answer, not the scanner, filesystem, events or results.
   // This lets the real UI scan a deterministic on-disk fixture without automating OS dialogs.
   await evaluate(`(() => {
-    const invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
-    window.__TAURI_INTERNALS__.invoke = (command, args, options) => command === 'plugin:dialog|open'
-      ? Promise.resolve(${JSON.stringify(fixture)}) : invoke(command, args, options);
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (input, options) => {
+      const url = new URL(typeof input === 'string' ? input : input.url);
+      if (url.hostname === 'ipc.localhost' && decodeURIComponent(url.pathname.slice(1)) === 'plugin:dialog|open') {
+        window.__diskoraPickerIntercepted = true;
+        return Promise.resolve(new Response(JSON.stringify(${JSON.stringify(fixture)}), {
+          headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' },
+        }));
+      }
+      return originalFetch(input, options);
+    };
   })()`);
   await until(() => click('Scan a folder…'), 'folder scan button');
   await until(() => evaluate(`!!document.querySelector('[data-testid="analyzed-size"]')`), 'completed scan in UI');
+  assert.equal(await evaluate('window.__diskoraPickerIntercepted'), true);
   const summary = await evaluate(`window.__TAURI_INTERNALS__.invoke('scan_list').then(rows => rows.find(row => row.rootPath === ${JSON.stringify(fixture)}))`);
   assert.equal(summary.totalBytes, 3 * 1024 * 1024 + 11);
   assert.equal(summary.fileCount, 4);

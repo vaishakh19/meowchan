@@ -21,8 +21,7 @@
     "rust:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
     "verify": "npm run typecheck && npm run test && npm run rust:fmt:check && npm run rust:test",
     "rust:fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
-    "test:all": "npm run typecheck && npm test && npm run build",
-    "bench": "node scripts/bench-tree.mjs"
+    "test:all": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.2",

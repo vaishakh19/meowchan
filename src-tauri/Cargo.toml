@@ -1,5 +1,6 @@
 [package]
 name = "diskwise"
+default-run = "diskwise"
 version = "0.1.0"
 description = "Diskwise — local-first disk space analyzer for Windows"
 authors = ["Diskwise"]
