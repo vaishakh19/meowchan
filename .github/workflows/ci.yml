@@ -86,13 +86,25 @@ jobs:
       # Session-only delivery: the authoring sandbox cannot reach
       # Actions artifact storage, so verified binaries are committed
       # back to the working branch once every check above passed.
+      # The checksum file is regenerated so it always matches the
+      # delivered binaries, and the step is a no-op when nothing
+      # changed (repeat runs must not fail here).
       - name: Deliver verified binaries to the session branch
         if: github.ref == 'refs/heads/arena/1d439cf2-meowchan'
         shell: pwsh
         run: |
           git config user.name "Diskora build"
           git config user.email "diskora-build@users.noreply.github.com"
+          $sums = @(
+            (Get-FileHash release\Diskora-setup.exe -Algorithm SHA256).Hash.ToLower() + "  Diskora-setup.exe",
+            (Get-FileHash release\Diskora.exe -Algorithm SHA256).Hash.ToLower() + "  Diskora.exe"
+          )
+          Set-Content -Path release\SHA256SUMS.txt -Value $sums
           git add src-tauri/Cargo.lock
-          git add -f release/Diskora.exe release/Diskora-setup.exe
-          git commit -m "Deliver Windows build and dependency lock [skip ci]"
-          git push origin HEAD:arena/1d439cf2-meowchan
+          git add -f release/Diskora.exe release/Diskora-setup.exe release/SHA256SUMS.txt
+          if (git diff --cached --quiet) {
+            Write-Output "No verified binary changes to deliver."
+          } else {
+            git commit -m "Deliver Windows build and dependency lock [skip ci]"
+            git push origin HEAD:arena/1d439cf2-meowchan
+          }
