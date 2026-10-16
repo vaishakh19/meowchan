@@ -74,6 +74,7 @@ pub fn list_large_files(query: LargeFileQuery, state: State<'_, AppState>) -> Ap
         .index
         .as_ref()
         .ok_or_else(|| AppError::NotFound("The scan is still running.".to_string()))?;
+    let index = index.read().expect("the scan index lock was poisoned");
 
     let extensions: Vec<String> = query
         .extensions

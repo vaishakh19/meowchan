@@ -128,9 +128,29 @@ pub fn privacy_report(state: State<'_, AppState>) -> AppResult<PrivacyReport> {
 
 
 
+    // Network activity is stated honestly: the free analyzer makes none, and
+    // the Pro licensing calls only happen when Pro is configured and used.
+    let mut network_activity = Vec::new();
+    if crate::licensing::is_configured() {
+        network_activity.push(
+            "Diskora Pro only: license activation and validation calls to Dodo Payments \
+             (the payment provider). Only the license key and a device name are sent — \
+             never file names, paths or contents.".to_string(),
+        );
+    }
+    let mut local_storage = vec![
+        "Preferences and scan summaries, stored locally.".to_string(),
+    ];
+    if crate::licensing::is_configured() {
+        local_storage.push(
+            "When you buy Diskora Pro: the license key, activation instance and \
+             verification timestamps, stored in the local database.".to_string(),
+        );
+    }
+
     Ok(PrivacyReport {
-        local_storage: vec!["Preferences and scan summaries, stored locally.".to_string()],
-        network_activity: vec![],
+        local_storage,
+        network_activity,
         data_dir,
         database_path,
     })

@@ -55,6 +55,7 @@ pub fn file_details(path: String, state: State<'_, AppState>) -> AppResult<FileD
     // Prefer the scan's aggregated totals for folders so the numbers match the visualization.
     let (file_count, folder_count, size_bytes, disk_size_bytes) = if meta.kind == Kind::Folder {
         match find_index(&state, &candidate).and_then(|index| {
+            let index = index.read().expect("the scan index lock was poisoned");
             index.position_of(&candidate).map(|position| {
                 let aggregate = &index.aggregates[position];
                 (
@@ -116,12 +117,17 @@ pub fn file_details(path: String, state: State<'_, AppState>) -> AppResult<FileD
 fn find_index(
     state: &State<'_, AppState>,
     path: &Path,
-) -> Option<std::sync::Arc<crate::scanner::aggregate::ScanIndex>> {
+) -> Option<std::sync::Arc<std::sync::RwLock<crate::scanner::aggregate::ScanIndex>>> {
     let scans = state.scans().ok()?;
     let mut best: Option<(i64, std::sync::Arc<crate::scanner::aggregate::ScanIndex>)> = None;
     for entry in scans.values() {
         if let Some(index) = entry.index.clone() {
-            if index.position_of(path).is_some() && best.as_ref().map(|(at, _)| entry.started_at > *at).unwrap_or(true) {
+            let contains = index
+                .read()
+                .expect("the scan index lock was poisoned")
+                .position_of(path)
+                .is_some();
+            if contains && best.as_ref().map(|(at, _)| entry.started_at > *at).unwrap_or(true) {
                 best = Some((entry.started_at, index));
             }
         }

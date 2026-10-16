@@ -75,6 +75,11 @@ impl Database {
                     CREATE INDEX IF NOT EXISTS scan_history_started_at
                         ON scan_history (started_at DESC);
 
+                    CREATE TABLE IF NOT EXISTS pro_entitlement (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        payload TEXT NOT NULL
+                    );
+
         "#).map_err(|error| error.to_string())?;
         Ok(())
     }
@@ -185,6 +190,40 @@ impl Database {
 
     /* ---------------------------- entitlement ---------------------------- */
 
+    /// The persisted Diskora Pro entitlement, if this device has a
+    /// verified purchase. The payload is a JSON `StoredEntitlement`.
+    pub fn load_entitlement(&self) -> Result<Option<String>, String> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT payload FROM pro_entitlement WHERE id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn save_entitlement(&self, payload: &str) -> Result<(), String> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "INSERT INTO pro_entitlement (id, payload) VALUES (1, ?1)
+                 ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
+                params![payload],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn clear_entitlement(&self) -> Result<(), String> {
+        let connection = self.lock()?;
+        connection
+            .execute("DELETE FROM pro_entitlement WHERE id = 1", [])
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.connection
             .lock()
@@ -285,6 +324,21 @@ mod tests {
         let database = Database::open(&path).unwrap();
         database.save_settings("{}").unwrap();
         assert!(database.load_settings().unwrap().is_some());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn entitlement_round_trips_and_clears() {
+        let path = temp_db("entitlement");
+        let database = Database::open(&path).unwrap();
+        assert!(database.load_entitlement().unwrap().is_none());
+        database.save_entitlement("{\"licenseKey\":\"ABCD\"}").unwrap();
+        assert_eq!(
+            database.load_entitlement().unwrap().as_deref(),
+            Some("{\"licenseKey\":\"ABCD\"}")
+        );
+        database.clear_entitlement().unwrap();
+        assert!(database.load_entitlement().unwrap().is_none());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

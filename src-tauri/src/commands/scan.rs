@@ -153,10 +153,13 @@ pub async fn scan_start(
 
         // Apply the pruning budget so the tree the UI receives is bounded.
         if let Some(index) = &entry.index {
-            let pruned = prune_tree(index, 0, PruneOptions {
-                max_children: walk_options.max_children_per_node as usize,
-                max_nodes: PruneOptions::default().max_nodes,
-            });
+            let pruned = {
+                let guard = index.read().expect("the scan index lock was poisoned");
+                prune_tree(&guard, 0, PruneOptions {
+                    max_children: walk_options.max_children_per_node as usize,
+                    max_nodes: PruneOptions::default().max_nodes,
+                })
+            };
             entry.pruned_nodes = pruned.pruned_nodes;
         }
 
@@ -172,9 +175,9 @@ pub async fn scan_start(
                     finished_at: entry.finished_at,
                     duration_ms: entry.duration_ms,
                     status: entry.status.clone(),
-                    total_bytes: entry.index.as_ref().map(|index| index.total_bytes() as i64).unwrap_or(0),
-                    file_count: entry.index.as_ref().map(|index| index.total_files() as i64).unwrap_or(0),
-                    folder_count: entry.index.as_ref().map(|index| index.total_folders() as i64).unwrap_or(0),
+                    total_bytes: entry.index.as_ref().map(|index| index.read().expect("the scan index lock was poisoned").total_bytes() as i64).unwrap_or(0),
+                    file_count: entry.index.as_ref().map(|index| index.read().expect("the scan index lock was poisoned").total_files() as i64).unwrap_or(0),
+                    folder_count: entry.index.as_ref().map(|index| index.read().expect("the scan index lock was poisoned").total_folders() as i64).unwrap_or(0),
                     error_count: entry.errors.len() as i64,
                     truncated: entry.hit_limit,
                     drive_id,
@@ -286,9 +289,9 @@ pub fn scan_list(state: State<'_, AppState>) -> AppResult<Vec<ScanSummary>> {
                 finished_at: entry.finished_at,
                 duration_ms: entry.duration_ms,
                 status: entry.status.clone(),
-                total_bytes: entry.index.as_ref().map(|index| index.total_bytes()).unwrap_or(0),
-                file_count: entry.index.as_ref().map(|index| index.total_files()).unwrap_or(0),
-                folder_count: entry.index.as_ref().map(|index| index.total_folders()).unwrap_or(0),
+                total_bytes: entry.index.as_ref().map(|index| index.read().expect("the scan index lock was poisoned").total_bytes()).unwrap_or(0),
+                file_count: entry.index.as_ref().map(|index| index.read().expect("the scan index lock was poisoned").total_files()).unwrap_or(0),
+                folder_count: entry.index.as_ref().map(|index| index.read().expect("the scan index lock was poisoned").total_folders()).unwrap_or(0),
                 error_count: entry.errors.len(),
                 truncated: entry.hit_limit,
                 drive_id: walker::drive_id_for(&std::path::PathBuf::from(&entry.root_path)),
@@ -359,6 +362,9 @@ pub fn scan_children(
         .index
         .as_ref()
         .ok_or_else(|| AppError::NotFound("The scan is still running.".to_string()))?;
+    // Readers and the (rare) deletion writer share the index through this
+    // lock; a page holds it only while the page is being built.
+    let index = index.read().expect("the scan index lock was poisoned");
 
     let target = std::path::PathBuf::from(&path);
     let position = index
@@ -367,7 +373,7 @@ pub fn scan_children(
 
     let mut items: Vec<TreeNode> = Vec::new();
     for child in index.children_of(position) {
-        items.push(folder_node(index, *child));
+        items.push(folder_node(&index, child));
     }
     for file in index.files_of(position) {
         items.push(file_node(file));
@@ -485,7 +491,10 @@ pub struct ChildrenPage {
 fn build_result(entry: &ScanEntry) -> ScanResult {
     let tree = match &entry.index {
         Some(index) => {
-            let pruned = prune_tree(index, 0, PruneOptions::default());
+            let pruned = {
+                let guard = index.read().expect("the scan index lock was poisoned");
+                prune_tree(&guard, 0, PruneOptions::default())
+            };
             pruned.tree
         }
         None => TreeNode {
@@ -516,8 +525,8 @@ fn build_result(entry: &ScanEntry) -> ScanResult {
         finished_at: entry.finished_at,
         status: entry.status.clone(),
         tree,
-        total_bytes: index.map(|index| index.total_bytes()).unwrap_or(0),
-        disk_total_bytes: index.and_then(|index| index.total_disk_bytes()),
+        total_bytes: index.map(|index| index.read().expect("the scan index lock was poisoned").total_bytes()).unwrap_or(0),
+        disk_total_bytes: index.and_then(|index| index.read().expect("the scan index lock was poisoned").total_disk_bytes()),
         file_count: index.map(|index| index.total_files()).unwrap_or(0),
         folder_count: index.map(|index| index.total_folders()).unwrap_or(0),
         errors: entry.errors.clone(),

@@ -191,6 +191,24 @@ export function CategoryChip({ color, label }: { color: string; label: string })
   );
 }
 
+/**
+ * The subtle marker that a feature is Diskora Pro. Purely informational:
+ * the actual lock lives in the native backend, never in this badge.
+ */
+export function ProBadge({ className }: { className?: string }) {
+  return (
+    <span
+      className={cx(
+        'inline-flex items-center gap-0.5 rounded-full border border-accent/40 bg-accent-soft px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-accent',
+        className,
+      )}
+      title="Diskora Pro"
+    >
+      Pro
+    </span>
+  );
+}
+
 /* ------------------------------------------------------------------ *
  * Progress & feedback
  * ------------------------------------------------------------------ */

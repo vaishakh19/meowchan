@@ -23,6 +23,8 @@ import {
 import type {
   AppSettings,
   AppVersion,
+  DeleteItemsRequest,
+  DeleteOutcome,
   DriveInfo,
   DuplicateOptions,
   DuplicateProgress,
@@ -31,6 +33,7 @@ import type {
   LargeFilePage,
   LargeFileQuery,
   PrivacyReport,
+  ProStatus,
   ScanProgress,
   ScanResult,
   ScanSummary,
@@ -38,6 +41,8 @@ import type {
 } from '@/types/contracts';
 import { getTransport, type BackendTransport, type Unsubscribe } from '@/lib/transport';
 import { findNode } from '@/features/visualization/layout';
+import { formatBytes } from '@/lib/format';
+import { parentPath } from '@/lib/path';
 import { nextId } from '@/lib/id';
 
 export type Route =
@@ -46,6 +51,7 @@ export type Route =
   | 'large-files'
   | 'duplicates'
   | 'history'
+  | 'pro'
   | 'settings'
   | 'privacy';
 
@@ -121,6 +127,18 @@ export interface AppState {
     error: string | null;
   };
 
+  /**
+   * Diskora Pro licence state, as verified by the native backend against
+   * Dodo Payments. `null` until the first check completes.
+   */
+  pro: ProStatus | null;
+
+  /** Pending safe-deletion request awaiting its confirmation dialog. */
+  deletion: {
+    paths: string[] | null;
+    working: boolean;
+  };
+
   settings: AppSettings | null;
   privacy: PrivacyReport | null;
   toasts: Toast[];
@@ -165,6 +183,8 @@ const initialState: AppState = {
     excludePaths: [],
   },
   details: { path: null, data: null, loading: false, error: null },
+  pro: null,
+  deletion: { paths: null, working: false },
   settings: null,
   privacy: null,
   toasts: [],
@@ -208,6 +228,11 @@ type Action =
   | { type: 'details-loading' }
   | { type: 'details-data'; data: FileDetails }
   | { type: 'details-error'; message: string }
+  | { type: 'pro-status'; status: ProStatus }
+  | { type: 'deletion-request'; paths: string[] }
+  | { type: 'deletion-working'; working: boolean }
+  | { type: 'deletion-done' }
+  | { type: 'scan-refreshed'; result: ScanResult }
   | { type: 'settings'; settings: AppSettings }
   | { type: 'privacy'; report: PrivacyReport }
   | { type: 'toast-push'; toast: Toast }
@@ -337,6 +362,19 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, details: { ...state.details, loading: false, data: action.data } };
     case 'details-error':
       return { ...state, details: { ...state.details, loading: false, error: action.message } };
+    case 'pro-status':
+      return { ...state, pro: action.status };
+    case 'deletion-request':
+      return { ...state, deletion: { paths: action.paths, working: false } };
+    case 'deletion-working':
+      return { ...state, deletion: { ...state.deletion, working: action.working } };
+    case 'deletion-done':
+      return { ...state, deletion: { paths: null, working: false } };
+    case 'scan-refreshed': {
+      // A post-deletion refresh: the result changes, but the user's place
+      // in the visualization must not move (unlike a brand-new scan).
+      return { ...state, scan: { ...state.scan, result: action.result } };
+    }
     case 'settings':
       return { ...state, settings: action.settings };
     case 'privacy':
@@ -377,6 +415,27 @@ export interface AppActions {
   excludeDuplicatePath(path: string): void;
   removeDuplicateExclusion(path: string): void;
   updateSettings(patch: Partial<AppSettings>): Promise<void>;
+
+  /* Diskora Pro */
+  /** Loads the cached licence state (no network). */
+  refreshProStatus(): Promise<void>;
+  /** Forces a fresh check with Dodo Payments. */
+  verifyPro(): Promise<void>;
+  /** Opens the Dodo Payments checkout for the one-time $12.99 purchase. */
+  openProCheckout(): Promise<void>;
+  activateLicense(licenseKey: string): Promise<void>;
+  /** Re-validates the stored purchase — the restore-purchases flow. */
+  restorePurchases(): Promise<void>;
+  /** Explains that a feature is Pro and offers the upgrade path. */
+  promptUpgrade(feature: string): void;
+
+  /* Safe deletion (Pro) */
+  /** Stores the selection and opens the confirmation dialog. */
+  requestDeletion(paths: string[]): void;
+  cancelDeletion(): void;
+  /** Confirmed deletion: Recycle Bin via the native backend, then refresh. */
+  confirmDeletion(): Promise<void>;
+
   toast(toast: Omit<Toast, 'id' | 'timeoutMs'> & { timeoutMs?: number }): void;
   dismissToast(id: string): void;
 }
@@ -428,7 +487,7 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       }));
       if (cancelled) return;
 
-      const [drives, settings, version, privacy, history] = await Promise.all([
+      const [drives, settings, version, privacy, history, pro] = await Promise.all([
         transport.listDrives().catch(() => [] as DriveInfo[]),
         transport.settingsGet().catch(error => {
           if (!cancelled) toast({ kind: 'warning', title: 'Preferences are unavailable', detail: describe(error) });
@@ -437,8 +496,10 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
         transport.appVersion().catch(() => null),
         transport.privacyReport().catch(() => null),
         transport.scanList().catch(() => [] as ScanSummary[]),
+        transport.proStatus().catch(() => null),
       ]);
       if (cancelled) return;
+      if (pro) dispatch({ type: 'pro-status', status: pro });
       dispatch({ type: 'drives', drives });
       if (settings) dispatch({ type: 'settings', settings });
       if (version) dispatch({ type: 'app-version', version });
@@ -612,6 +673,12 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       },
 
       copyPath: async (path) => {
+        // Full-path viewing and copying is a Pro feature; the gate is
+        // enforced here as well as in the UI so no surface can bypass it.
+        if (!stateRef.current.pro?.enabled) {
+          actions.promptUpgrade('Full path copying');
+          return;
+        }
         try {
           await navigator.clipboard.writeText(path);
           toast({ kind: 'success', title: 'Path copied', detail: path, timeoutMs: 3000 });
@@ -683,6 +750,158 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
         } catch (error) {
           if (previous) dispatch({ type: 'settings', settings: previous });
           toast({ kind: 'error', title: 'Could not save settings', detail: describe(error) });
+        }
+      },
+
+      /* ------------------------------- Diskora Pro ------------------------------- */
+
+      refreshProStatus: async () => {
+        try {
+          dispatch({ type: 'pro-status', status: await requireTransport().proStatus() });
+        } catch (error) {
+          toast({ kind: 'warning', title: 'Could not check Diskora Pro status', detail: describe(error) });
+        }
+      },
+
+      verifyPro: async () => {
+        try {
+          dispatch({ type: 'pro-status', status: await requireTransport().proVerify() });
+        } catch (error) {
+          toast({ kind: 'error', title: 'Could not verify the purchase', detail: describe(error) });
+          throw error;
+        }
+      },
+
+      openProCheckout: async () => {
+        try {
+          const { url } = await requireTransport().proCheckout();
+          toast({
+            kind: 'info',
+            title: 'Checkout opened in your browser',
+            detail: url,
+            timeoutMs: 8000,
+          });
+          await actions.refreshProStatus();
+        } catch (error) {
+          toast({ kind: 'error', title: 'Could not open the checkout', detail: describe(error) });
+        }
+      },
+
+      activateLicense: async (licenseKey) => {
+        try {
+          const status = await requireTransport().proActivate(licenseKey.trim());
+          dispatch({ type: 'pro-status', status });
+          if (status.enabled) {
+            toast({ kind: 'success', title: 'Diskora Pro is active', detail: 'Both Pro features are unlocked on this device.' });
+          } else {
+            toast({ kind: 'error', title: 'Activation failed', detail: status.message });
+          }
+        } catch (error) {
+          toast({ kind: 'error', title: 'Activation failed', detail: describe(error) });
+          throw error;
+        }
+      },
+
+      restorePurchases: async () => {
+        try {
+          const status = await requireTransport().proRestore();
+          dispatch({ type: 'pro-status', status });
+          if (status.enabled) {
+            toast({ kind: 'success', title: 'Purchase restored', detail: status.message });
+          } else {
+            toast({
+              kind: 'info',
+              title: 'No active purchase found',
+              detail: 'Dodo Payments reports no valid Diskora Pro licence for this device. Activate it with your license key instead.',
+            });
+          }
+        } catch (error) {
+          toast({ kind: 'error', title: 'Could not restore purchases', detail: describe(error) });
+          throw error;
+        }
+      },
+
+      promptUpgrade: (feature) => {
+        toast({
+          kind: 'info',
+          title: `${feature} is a Diskora Pro feature`,
+          detail: 'Upgrade once to unlock it — $12.99, no subscription.',
+          timeoutMs: 7000,
+          action: { label: 'Upgrade to Pro', run: () => actions.navigate('pro') },
+        });
+      },
+
+      /* ------------------------------ safe deletion ------------------------------ */
+
+      requestDeletion: (paths) => {
+        if (paths.length === 0) return;
+        if (!stateRef.current.pro?.enabled) {
+          actions.promptUpgrade('Safe file deletion');
+          return;
+        }
+        dispatch({ type: 'deletion-request', paths });
+      },
+
+      cancelDeletion: () => dispatch({ type: 'deletion-done' }),
+
+      confirmDeletion: async () => {
+        const paths = stateRef.current.deletion.paths;
+        const scanId = stateRef.current.scan.activeScanId;
+        if (!paths || paths.length === 0 || !scanId) {
+          dispatch({ type: 'deletion-done' });
+          return;
+        }
+        dispatch({ type: 'deletion-working', working: true });
+        try {
+          const transport = requireTransport();
+          const request: DeleteItemsRequest = { scanId, paths };
+          const outcome: DeleteOutcome = await transport.deleteItems(request);
+
+          if (outcome.deleted.length > 0) {
+            const reclaimed = outcome.deleted.reduce((sum, item) => sum + item.sizeBytes, 0);
+            toast({
+              kind: 'success',
+              title:
+                outcome.deleted.length === 1
+                  ? `Moved “${outcome.deleted[0].name}” to the Recycle Bin`
+                  : `Moved ${outcome.deleted.length} items to the Recycle Bin`,
+              detail: `${formatBytes(reclaimed)} reclaimed — restore them from the Windows Recycle Bin if you change your mind.`,
+              timeoutMs: 7000,
+            });
+
+            // Refresh the scan results from the updated index.
+            const refreshed = await transport.scanGet(scanId);
+            if (refreshed) dispatch({ type: 'scan-refreshed', result: refreshed });
+
+            // If the selection was deleted, move it to the nearest surviving parent.
+            const { selectedPath } = stateRef.current.viz;
+            if (selectedPath && paths.some((path) => selectedPath === path || selectedPath.startsWith(`${path}\\`))) {
+              const surviving = paths
+              .map((path) => parentPath(path))
+              .find(
+                (parent): parent is string =>
+                  parent !== null && parent.length >= 3 && !paths.includes(parent),
+              );
+              actions.selectNode(surviving ?? null);
+            }
+          }
+
+          if (outcome.failed.length > 0) {
+            const first = outcome.failed[0];
+            toast({
+              kind: 'error',
+              title:
+                outcome.failed.length === 1
+                  ? `Could not move “${first.path.split('\\').pop()}” to the Recycle Bin`
+                  : `${outcome.failed.length} items could not be moved`,
+              detail: `${first.reason}${outcome.failed.length > 1 ? ` (and ${outcome.failed.length - 1} more)` : ''}`,
+              timeoutMs: 9000,
+            });
+          }
+        } catch (error) {
+          toast({ kind: 'error', title: 'Deletion failed', detail: describe(error) });
+        } finally {
+          dispatch({ type: 'deletion-done' });
         }
       },
 

@@ -1,9 +1,14 @@
-//! Narrowly scoped, read-only filesystem commands.
+//! Narrowly scoped commands. Everything that reads the filesystem stays
+//! read-only; the only mutating command is the guarded Recycle Bin
+//! deletion (`delete`). The `pro` commands verify licences with Dodo
+//! Payments and never touch the filesystem.
 
+pub mod delete;
 pub mod drives;
 pub mod duplicates;
 pub mod files;
 pub mod large_files;
+pub mod pro;
 pub mod scan;
 pub mod settings;
 
@@ -19,14 +24,16 @@ mod tests {
     #[test]
     fn every_command_module_is_declared() {
         let modules: Vec<&str> = vec![
+            stringify!(crate::commands::delete),
             stringify!(crate::commands::drives),
             stringify!(crate::commands::duplicates),
             stringify!(crate::commands::files),
             stringify!(crate::commands::large_files),
+            stringify!(crate::commands::pro),
             stringify!(crate::commands::scan),
             stringify!(crate::commands::settings),
         ];
-        assert_eq!(modules.len(), 6);
+        assert_eq!(modules.len(), 8);
     }
 
     /// `validate_path` must be reachable crate-wide: the destructive paths reuse it rather than
