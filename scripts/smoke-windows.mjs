@@ -12,8 +12,8 @@ writeFileSync(join(fixture, 'a.bin'), Buffer.alloc(1024 * 1024, 1));
 writeFileSync(join(fixture, 'b.bin'), Buffer.alloc(1024 * 1024, 1));
 writeFileSync(join(fixture, 'c.bin'), Buffer.alloc(1024 * 1024, 2));
 writeFileSync(join(fixture, 'nested-文件', 'small.txt'), 'hello world');
-const executable = join(directory, 'Renamed.exe');
-copyFileSync(resolve('release/Diskora.exe'), executable);
+const executable = process.argv[2] ? resolve(process.argv[2]) : join(directory, 'Renamed.exe');
+if (!process.argv[2]) copyFileSync(resolve('release/Diskora.exe'), executable);
 const app = spawn(executable, [], { cwd: directory, env: {
   ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9222',
 }, stdio: 'ignore' });
