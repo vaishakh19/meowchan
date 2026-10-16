@@ -507,10 +507,10 @@ mod tests {
             "C:\\$Recycle.Bin",
             "C:\\Recovery\\ReCustomization.dat",
         ] {
-            assert_eq!(
-                guard_structure(Path::new(path), root),
-                Err(DeletionGuard::Protected(_)),
-                "{path} must stay protected"
+            let result = guard_structure(Path::new(path), root);
+            assert!(
+                matches!(result, Err(DeletionGuard::Protected(_))),
+                "{path} must stay protected, got {result:?}"
             );
         }
         // A user's own profile and ordinary user data stay deletable.

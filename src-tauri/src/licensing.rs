@@ -368,12 +368,12 @@ fn activation_failure(status: u16, body: &str) -> String {
                 })
                 .map(str::to_string)
         });
-    match (status, detail) {
+    match (status, detail.as_deref()) {
         (401, _) | (403, _) => "Dodo Payments rejected this key. Check it and try again.".to_string(),
         (404, _) => "Dodo Payments does not know this license key.".to_string(),
         (409, _) | (422, _) => format!(
             "This license key cannot be activated: {}. Restore purchases on a device that is already activated, or contact support.",
-            detail.unwrap_or_else(|| "the activation limit may be reached".to_string())
+            detail.as_deref().unwrap_or("the activation limit may be reached")
         ),
         (status, Some(detail)) => format!("Dodo Payments rejected the activation (HTTP {status}): {detail}"),
         (status, None) => format!("Dodo Payments rejected the activation (HTTP {status})."),
