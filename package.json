@@ -1,0 +1,54 @@
+{
+  "name": "diskora",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first Windows disk space analyzer",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:build": "node scripts/build-windows.mjs",
+    "app:build:debug": "tauri build --debug",
+    "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "rust:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "verify": "npm run typecheck && npm run test && npm run rust:fmt:check && npm run rust:test",
+    "rust:fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
+    "test:all": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.2",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "d3": "^7.9.0",
+    "lucide-react": "^0.469.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "2.11.3",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/d3": "^7.4.3",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "jsdom": "^26.1.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}

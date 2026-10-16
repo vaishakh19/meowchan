@@ -1,0 +1,46 @@
+[package]
+name = "diskwise"
+default-run = "diskwise"
+version = "0.1.0"
+description = "Diskwise — local-first disk space analyzer for Windows"
+authors = ["Diskwise"]
+edition = "2021"
+rust-version = "1.99"
+
+[lib]
+name = "diskwise_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["wry"] }
+tauri-plugin-dialog = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Local database (settings and scan history).
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Cryptographic hashing for duplicate detection.
+sha2 = "0.10"
+
+
+# Parallel directory walking and hashing.
+rayon = "1"
+
+
+thiserror = "1"
+
+[features]
+# Default = no custom features; everything ships in the binary.
+default = []
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

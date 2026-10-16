@@ -1,0 +1,2 @@
+6720c79b83e3c6d1a1ecd7b734e0aaff4d16df732ccc7a5e5d34f63be2401244  Diskora-setup.exe
+d550658745bf634eac4ad5c8380f1ecaee33ec7bb12261b7ee0be410097d9dbb  Diskora.exe
