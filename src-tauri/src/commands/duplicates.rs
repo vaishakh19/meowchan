@@ -118,27 +118,21 @@ pub async fn find_duplicates(
             },
         );
 
-        let _ = progress_app.emit(
-            DUPLICATE_PROGRESS_EVENT,
-            &DuplicateProgress {
-                report_id: progress_id.clone(),
-                phase: "done".to_string(),
-                files_hashed: report.files_hashed,
-                bytes_hashed: report.hashed_bytes,
-                groups_found: report.total_groups,
-                elapsed_ms: started.elapsed().as_millis() as u64,
-                eta_ms: None,
-            },
-        );
-
-        // The free tier sees the largest N groups and nothing else. Truncation happens here, in the
-        // backend, so the limit cannot be lifted from the interface.
+        let payload = DuplicateProgress {
+            report_id: progress_id.clone(),
+            phase: "done".to_string(),
+            files_hashed: report.files_hashed,
+            bytes_hashed: report.hashed_bytes,
+            groups_found: report.total_groups,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            eta_ms: None,
+        };
         let report = grouping::limit_groups(report, group_limit);
-
         let state = progress_app.state::<AppState>();
         if let Ok(mut registry) = state.duplicate_reports.lock() {
             registry.insert(progress_id, report);
         }
+        let _ = progress_app.emit(DUPLICATE_PROGRESS_EVENT, &payload);
     });
 
     Ok(report_id)

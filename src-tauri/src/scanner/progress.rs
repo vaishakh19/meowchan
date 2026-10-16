@@ -9,9 +9,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 /// Mirrors the `ScanPhase` union in `src/types/contracts.ts`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ScanPhase {
+    #[default]
     Preparing,
     Walking,
     Hashing,
@@ -139,12 +140,16 @@ impl ProgressCounters {
 }
 
 /// A single progress reading.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProgressSnapshot {
+    pub scan_id: String,
+    pub status: ScanStatus,
+    pub truncated: bool,
     pub phase: ScanPhase,
-    pub files: u64,
-    pub folders: u64,
-    pub bytes: u64,
+    pub files_scanned: u64,
+    pub folders_scanned: u64,
+    pub bytes_analyzed: u64,
     pub errors: usize,
     pub current_path: String,
     pub elapsed_ms: u64,

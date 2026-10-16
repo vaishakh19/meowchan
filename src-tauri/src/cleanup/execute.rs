@@ -166,7 +166,7 @@ fn revalidate(path: &str, context: &ValidationContext<'_>) -> Check {
         if current_len != record.size {
             return Check::Skip {
                 reason: format!(
-                    "The file changed since the scan ({record.size} bytes then, {current_len} bytes now)."
+                    "The file changed since the scan ({} bytes then, {current_len} bytes now).", record.size
                 ),
             };
         }

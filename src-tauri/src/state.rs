@@ -23,6 +23,7 @@ use crate::settings::AppSettings;
 use crate::storage::db::Database;
 
 /// One completed (or in-flight) scan.
+#[derive(Clone)]
 pub struct ScanEntry {
     pub scan_id: String,
     pub root_path: String,
@@ -166,10 +167,18 @@ pub fn snapshot(
 ) -> ProgressSnapshot {
     let (percent, eta_ms) = crate::scanner::progress::estimate(counters.bytes(), expected, elapsed_ms);
     ProgressSnapshot {
+        scan_id: scan_id.to_string(),
+        status: match counters.phase() {
+            crate::scanner::progress::ScanPhase::Done => crate::scanner::progress::ScanStatus::Complete,
+            crate::scanner::progress::ScanPhase::Cancelled => crate::scanner::progress::ScanStatus::Cancelled,
+            crate::scanner::progress::ScanPhase::Error => crate::scanner::progress::ScanStatus::Error,
+            _ => crate::scanner::progress::ScanStatus::Running,
+        },
+        truncated: counters.is_cancelled(),
         phase: counters.phase(),
-        files: counters.files(),
-        folders: counters.folders(),
-        bytes: counters.bytes(),
+        files_scanned: counters.files(),
+        folders_scanned: counters.folders(),
+        bytes_analyzed: counters.bytes(),
         errors: counters.error_count(),
         current_path: counters.current_path(),
         elapsed_ms,
