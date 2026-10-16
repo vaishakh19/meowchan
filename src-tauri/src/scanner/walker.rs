@@ -99,6 +99,7 @@ struct WorkQueue {
 struct QueueState {
     pending: Vec<(PathBuf, usize)>,
     finished: bool,
+    active: usize,
 }
 
 impl WorkQueue {
@@ -107,6 +108,7 @@ impl WorkQueue {
             inner: Mutex::new(QueueState {
                 pending: vec![(root, 0)],
                 finished: false,
+                active: 0,
             }),
             available: Condvar::new(),
         }
@@ -114,6 +116,7 @@ impl WorkQueue {
 
     fn push(&self, path: PathBuf, depth: usize) {
         if let Ok(mut state) = self.inner.lock() {
+            if state.finished { return; }
             state.pending.push((path, depth));
             drop(state);
         }
@@ -124,6 +127,7 @@ impl WorkQueue {
         let mut state = self.inner.lock().ok()?;
         loop {
             if let Some(item) = state.pending.pop() {
+                state.active += 1;
                 return Some(item);
             }
             if state.finished {
@@ -133,9 +137,20 @@ impl WorkQueue {
         }
     }
 
+    fn complete(&self) {
+        if let Ok(mut state) = self.inner.lock() {
+            state.active = state.active.saturating_sub(1);
+            if state.active == 0 && state.pending.is_empty() {
+                state.finished = true;
+            }
+        }
+        self.available.notify_all();
+    }
+
     fn finish(&self) {
         if let Ok(mut state) = self.inner.lock() {
             state.finished = true;
+            state.pending.clear();
         }
         self.available.notify_all();
     }
@@ -192,7 +207,7 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
     counters.set_phase(ScanPhase::Walking);
 
     let queue = Arc::new(WorkQueue::with_root(root.clone()));
-    let visited: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+    let visited: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::from([std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone())])));
     let output: Arc<Mutex<WorkOutput>> = Arc::new(Mutex::new(WorkOutput::default()));
 
     let workers = worker_count();
@@ -207,13 +222,17 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
         handles.push(std::thread::spawn(move || {
             while let Some((dir, depth)) = queue.pop() {
                 if counters.is_cancelled() {
+                    queue.finish();
+                    queue.complete();
                     break;
                 }
                 if options.max_depth > 0 && depth >= options.max_depth as usize {
+                    queue.complete();
                     continue;
                 }
                 counters.set_current_path(&dir.to_string_lossy());
                 scan_directory(&dir, depth, &options, &counters, &queue, &visited, &output);
+                queue.complete();
             }
         }));
     }
@@ -455,6 +474,17 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         base
+    }
+
+    #[test]
+    fn queue_finishes_when_the_last_in_flight_directory_completes() {
+        let queue = WorkQueue::with_root(PathBuf::from("root"));
+        assert!(queue.pop().is_some());
+        queue.push(PathBuf::from("child"), 1);
+        queue.complete();
+        assert!(queue.pop().is_some());
+        queue.complete();
+        assert!(queue.pop().is_none());
     }
 
     #[test]

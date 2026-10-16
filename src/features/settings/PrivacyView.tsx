@@ -9,7 +9,7 @@
 import { useMemo } from 'react';
 import { Check, Database, EyeOff, ShieldCheck, WifiOff } from 'lucide-react';
 import { useApp } from '@/app/state';
-import { Button, EmptyState, Notice, Panel, SectionTitle } from '@/components/ui/primitives';
+import { Button, EmptyState, Panel, SectionTitle } from '@/components/ui/primitives';
 
 const NEVER = [
   'No account is required and none is created.',
@@ -17,7 +17,7 @@ const NEVER = [
   'No full-path analytics or telemetry.',
   'No ads, no sponsored results, no bundled toolbars.',
   'No hidden or background scanning: a scan only runs while you are looking at it, and it stops when you cancel.',
-  'Diskora never executes a file it has analysed.',
+  'Files are only opened with their default application when you explicitly choose Open.',
   'Diskora never elevates privileges or asks for administrator rights to scan a folder you can already read.',
 ];
 
@@ -33,7 +33,7 @@ export function PrivacyView(): React.JSX.Element {
         title: 'Leaves this device',
         items:
           report.networkActivity.length === 0
-            ? ['Nothing. Crash reporting is off unless you turn it on in Settings.']
+            ? ['Nothing. Diskora has no telemetry or network service.']
             : report.networkActivity,
         icon: <WifiOff aria-hidden className="size-3.5" />,
       },
@@ -112,19 +112,10 @@ export function PrivacyView(): React.JSX.Element {
           </ul>
         </Panel>
 
-        <Notice tone="info" className="mb-3">
-          Crash reporting is opt-in and off by default. When you enable it, Diskora sends a stack
-          trace and the app version — no paths, no file names, no scan results.
-        </Notice>
-
         <Panel className="p-3">
-          <SectionTitle className="px-0 pt-0">Cleanup safety</SectionTitle>
+          <SectionTitle className="px-0 pt-0">Read-only analysis</SectionTitle>
           <p className="text-[11px] leading-relaxed text-ink-muted">
-            Diskora deletes nothing because a file was selected or analysed. Cleanup actions only
-            apply to folders you explicitly list, always show the exact paths and byte totals, always
-            require a confirmation click, and prefer the Recycle Bin. Permanent deletion is a
-            separate, clearly-labelled action. At least one copy of every duplicate group is always
-            preserved.
+            Diskora does not delete or move your files. Use Reveal in File Explorer to manage files manually.
           </p>
           <Button size="sm" className="mt-2" variant="secondary" onClick={() => actions.navigate('settings')}>
             Open settings
