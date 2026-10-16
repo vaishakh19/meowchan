@@ -79,7 +79,7 @@ describe('application shell', () => {
     await user.click(screen.getByRole('button', { name: /^home$/i }));
     await user.click(screen.getByRole('button', { name: /read the privacy details/i }));
     expect(screen.getByTestId('privacy-view')).toBeDefined();
-    expect(screen.getByText(/what diskwise never does/i)).toBeDefined();
+    expect(screen.getByText(/what diskora never does/i)).toBeDefined();
   });
 
   it('runs a scan through the demo transport and renders real results', async () => {
