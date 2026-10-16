@@ -26,12 +26,12 @@ import { useApp } from './state';
 export function DetailsPanel(): React.JSX.Element {
   const { state, actions } = useApp();
   const { details, scan, viz } = state;
-  const node = useMemo(
-    () => (scan.result && viz.selectedPath ? findNode(scan.result.tree, viz.selectedPath) : null),
-    [scan.result, viz.selectedPath],
-  );
+  const node = useMemo(() => {
+    const cached = scan.result && viz.selectedPath ? findNode(scan.result.tree, viz.selectedPath) : null;
+    const live = details.data?.path === viz.selectedPath ? details.data : null;
+    return cached ?? (live ? { ...live, id: live.path, children: [], synthetic: false, accessDenied: false } : null);
+  }, [scan.result, viz.selectedPath, details.data]);
 
-  const data = details.data;
   const selected = viz.selectedPath !== null;
   const synthetic = viz.selectedPath ? isSyntheticPath(viz.selectedPath) : false;
 
@@ -175,9 +175,6 @@ export function DetailsPanel(): React.JSX.Element {
               <Meta label="Modified" value={formatDateTime(node?.modifiedAt ?? null)} />
               <Meta label="Modified" hint={formatRelativeTime(node?.modifiedAt ?? null)} value="" hideLabel />
               <Meta label="Created" value={formatDateTime(node?.createdAt ?? null)} />
-              {data?.attributes && data.attributes.length > 0 ? (
-                <Meta label="Attributes" value={data.attributes.join(', ')} />
-              ) : null}
               {node?.accessDenied ? (
                 <Meta label="Access" value="Denied — contents were not read" />
               ) : null}

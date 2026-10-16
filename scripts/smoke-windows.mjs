@@ -83,6 +83,13 @@ try {
   assert.equal(summary.fileCount, 4);
   assert.equal(summary.folderCount, 1);
   assert.equal(summary.status, 'complete');
+  await until(() => click('Large Files'), 'large-file navigation');
+  await evaluate(`(() => {
+    const input = document.querySelector('input[placeholder="e.g. 750 MB"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '1 MB');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await until(() => evaluate(`document.querySelector('[data-testid="large-files-count"]')?.textContent === '3'`), 'filtered large-file results');
   await until(() => click('Duplicate Finder'), 'duplicate navigation');
   await until(() => click('Find duplicates'), 'duplicate scan button');
   await until(() => evaluate(`document.body.textContent.includes('2 copies ·')`), 'real duplicate report');
@@ -93,6 +100,9 @@ try {
   console.log('PASS: renamed executable launched outside the build tree; real UI scanned 4 files including a Unicode folder, reported exact totals and found 2 content-identical copies (not the equal-sized different file).');
 } catch (error) {
   console.error(`::error title=Desktop smoke test::${String(error).replaceAll('\n', '%0A')}`);
+  if (socket?.readyState === WebSocket.OPEN) {
+    try { console.error(`::error title=Desktop contents::${(await evaluate('document.body.innerText')).slice(-2500).replaceAll('\n', '%0A')}`); } catch {}
+  }
   throw error;
 } finally {
   socket?.close();

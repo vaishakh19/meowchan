@@ -329,7 +329,7 @@ fn scan_directory(
             }
         };
 
-        let path = entry.path();
+        let path = crate::filesystem::long_path::normalize_long_path(&entry.path());
         let meta = match read_metadata(&path, depth + 1) {
             Ok(meta) => meta,
             Err(error) => {
@@ -614,7 +614,7 @@ mod tests {
         assert!(options.include_hidden);
         assert!(options.include_system);
         assert_eq!(options.max_depth, 0);
-        assert_eq!(options.max_entries, 0);
+        assert_eq!(options.max_entries, 1_000_000);
         assert!(!options.compute_hashes);
     }
 

@@ -245,34 +245,28 @@ pub struct PruneResult {
 /// equivalent: `src/lib/tree.test.ts` asserts the monotonicity the search relies on, and the
 /// benchmark in `src-tauri/src/bin/bench.rs` measures the cost.
 pub fn prune_tree(index: &ScanIndex, root: usize, options: PruneOptions) -> PruneResult {
-    let max_children = options.max_children.max(2);
-    let max_nodes = options.max_nodes.max(max_children + 1);
-
-    let depth = index_depth(index, root);
-    let mut result = build_limited(index, root, max_children, depth);
-    if count_nodes(&result.tree) <= max_nodes {
-        return finish(result);
+    if index.directories.get(root).is_none() {
+        return PruneResult {
+            tree: TreeNode {
+                id: "empty".into(), path: String::new(), name: "Unavailable".into(), kind: "folder".into(),
+                size_bytes: 0, disk_size_bytes: None, file_count: 0, folder_count: 0,
+                modified_at: None, created_at: None, extension: None, category: "other".into(),
+                access_denied: true, children: Vec::new(), synthetic: true,
+            },
+            pruned_nodes: 0, truncated: false,
+        };
     }
-
-    // The tree is too big, so the depth has to come down.
-    let mut low = 1usize;
-    let mut high = depth.saturating_sub(1).max(1);
+    let max_children = options.max_children.max(2);
+    let max_nodes = options.max_nodes.max(1);
+    let mut low = 0usize;
+    let mut high = index_depth(index, root);
     while low < high {
         let middle = low + (high - low + 1) / 2;
         let candidate = build_limited(index, root, max_children, middle);
-        if count_nodes(&candidate.tree) <= max_nodes {
-            low = middle;
-        } else {
-            high = middle - 1;
-        }
+        if count_nodes(&candidate.tree) <= max_nodes { low = middle; }
+        else { high = middle - 1; }
     }
-
-    // Rebuild once at the deepest level that fits, so the returned result is the best one found.
-    result = build_limited(index, root, max_children, low);
-    if count_nodes(&result.tree) > max_nodes && low > 1 {
-        result = build_limited(index, root, max_children, 1);
-    }
-    finish(result)
+    finish(build_limited(index, root, max_children, low))
 }
 
 fn finish(result: Limited) -> PruneResult {
@@ -326,7 +320,7 @@ fn build_node(
 
     if depth >= max_depth {
         // Everything below this point is folded into the node's totals.
-        *pruned_nodes += subtree_size(index, position);
+        *pruned_nodes += subtree_size(index, position).saturating_sub(1);
         return node;
     }
 
@@ -430,7 +424,7 @@ fn index_depth(index: &ScanIndex, root: usize) -> usize {
     let mut deepest = 0usize;
     let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
     while let Some((position, depth)) = stack.pop() {
-        deepest = deepest.max(depth);
+        deepest = deepest.max(depth + usize::from(!index.files_of(position).is_empty()));
         for child in index.children_of(position) {
             stack.push((*child, depth + 1));
         }

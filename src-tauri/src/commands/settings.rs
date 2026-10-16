@@ -81,19 +81,30 @@ pub fn settings_update(
     }
 
     let settings = current.normalized();
-    let payload =
-        serde_json::to_string(&settings).map_err(|error| AppError::Internal(error.to_string()))?;
-    if let Ok(guard) = state.database() {
-        if let Some(database) = guard.as_ref() {
-            database
-                .save_settings(&payload)
-                .map_err(AppError::Database)?;
-        }
+    {
+        let guard = state.database()?;
+        let database = guard.as_ref().ok_or_else(|| AppError::Database(
+            "Preferences cannot be saved because the local database is unavailable.".to_string()
+        ))?;
+        let previous = database.load_settings().map_err(AppError::Database)?;
+        let payload = merge_preferences(previous.as_deref(), &settings)?;
+        database.save_settings(&payload).map_err(AppError::Database)?;
     }
     if let Ok(mut guard) = state.settings.lock() {
         *guard = Some(settings.clone());
     }
     Ok(settings)
+}
+
+// Preserve unknown legacy preferences when saving the supported fields.
+fn merge_preferences(previous: Option<&str>, settings: &AppSettings) -> AppResult<String> {
+    let mut stored: serde_json::Value = previous.and_then(|text| serde_json::from_str(text).ok())
+        .filter(|value: &serde_json::Value| value.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let (Some(object), Some(current)) = (stored.as_object_mut(), serde_json::to_value(settings)?.as_object()) {
+        object.extend(current.clone());
+    }
+    Ok(serde_json::to_string(&stored)?)
 }
 
 /// Exactly what Diskwise stores locally and what (if anything) leaves the device.
@@ -110,7 +121,7 @@ pub fn privacy_report(state: State<'_, AppState>) -> AppResult<PrivacyReport> {
                     .unwrap_or_default(),
                 database.path().to_string_lossy().to_string(),
             ),
-            None => (String::new(), String::new()),
+            None => return Err(AppError::Database("The local database is unavailable.".to_string())),
         }
     };
 
@@ -143,6 +154,15 @@ pub fn app_version(app: tauri::AppHandle) -> AppVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saving_preferences_preserves_unrecognized_legacy_fields() {
+        let saved = merge_preferences(Some(r#"{"legacyPaths":["keep"],"theme":"light"}"#),
+            &AppSettings { theme: "dark".into(), ..Default::default() }).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(value["legacyPaths"][0], "keep");
+        assert_eq!(value["theme"], "dark");
+    }
 
     #[test]
     fn a_partial_patch_only_touches_the_fields_it_names() {
@@ -193,9 +213,8 @@ pub(crate) fn settings_get_for_bootstrap(
             .database
             .lock()
             .map_err(|_| AppError::Internal("The database lock was poisoned.".to_string()))?;
-        guard
-            .as_ref()
-            .and_then(|database| database.load_settings().ok().flatten())
+        guard.as_ref().ok_or_else(|| AppError::Database("The local database is unavailable.".to_string()))?
+            .load_settings().map_err(AppError::Database)?
     };
     Ok(match stored {
         Some(payload) => serde_json::from_str::<AppSettings>(&payload)

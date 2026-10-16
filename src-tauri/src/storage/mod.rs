@@ -1,9 +1,3 @@
-//! Local storage.
-//!
-//! One SQLite database, in WAL mode, with `PRAGMA user_version` migrations. It holds preferences,
-//! cached scan history and the cached entitlement. Nothing else: no file contents, no full-path
-//! analytics, and the database can be deleted without affecting scanning.
-
+//! Local preferences and scan summaries. Existing databases are retained.
 pub mod db;
-
-pub use db::{Database};
+pub use db::Database;

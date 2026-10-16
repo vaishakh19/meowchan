@@ -170,7 +170,7 @@ export interface ScanSummary {
   truncated: boolean;
   /** Drive the scan ran on, when the root is a drive root. */
   driveId: string | null;
-  /** Set for scans that were persisted to the local database (Pro feature). */
+  /** Set for scans that were persisted to the local database. */
   persisted: boolean;
 }
 
@@ -324,12 +324,7 @@ export interface FileDetails {
   category: StorageCategory;
   isSymlink: boolean;
   isReadOnly: boolean;
-  isHidden: boolean;
-  /** Raw Windows file attributes, rendered as friendly chips. */
-  attributes: string[];
-  largestChildren: TreeNode[];
   parentPath: string | null;
-  exists: boolean;
 }
 
 export interface AppVersion {
