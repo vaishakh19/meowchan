@@ -66,7 +66,7 @@ export function Sidebar(): React.JSX.Element {
           variant="primary"
           className="w-full justify-start"
           onClick={() => void actions.scanDrive()}
-          disabled={scanning || drives.length === 0}
+          disabled={!state.ready || scanning || drives.length === 0}
           data-testid="scan-drive"
         >
           {scanning ? <Square aria-hidden className="size-3.5" /> : <Play aria-hidden className="size-3.5" />}
@@ -76,7 +76,7 @@ export function Sidebar(): React.JSX.Element {
           variant="secondary"
           className="w-full justify-start"
           onClick={() => void actions.pickAndScanFolder()}
-          disabled={scanning}
+          disabled={!state.ready || scanning}
         >
           <FolderSearch aria-hidden className="size-3.5" />
           Scan a folder…

@@ -80,3 +80,14 @@ it('disposes a native subscription that finishes registering after unmount', asy
   resolveListener(unsubscribe);
   await waitFor(() => expect(unsubscribe).toHaveBeenCalledTimes(1));
 });
+
+it('keeps scanning disabled until native initialization is complete', async () => {
+  let resolveListener!: (callback: () => void) => void;
+  listen.mockImplementationOnce(() => new Promise(resolve => { resolveListener = resolve; }));
+  render(<App />);
+  const button = screen.getByRole('button', { name: /scan a folder/i }) as HTMLButtonElement;
+  await waitFor(() => expect(listen).toHaveBeenCalled());
+  expect(button.disabled).toBe(true);
+  resolveListener(vi.fn());
+  await waitFor(() => expect(button.disabled).toBe(false));
+});

@@ -87,8 +87,8 @@ try {
     };
   })()`);
   await until(() => click('Scan a folder…'), 'folder scan button');
+  await until(() => evaluate('window.__diskoraPickerIntercepted === true'), 'intercepted folder picker');
   await until(() => evaluate(`!!document.querySelector('[data-testid="analyzed-size"]')`), 'completed scan in UI');
-  assert.equal(await evaluate('window.__diskoraPickerIntercepted'), true);
   const summary = await evaluate(`window.__TAURI_INTERNALS__.invoke('scan_list').then(rows => rows.find(row => row.rootPath === ${JSON.stringify(fixture)}))`);
   assert.equal(summary.totalBytes, 3 * 1024 * 1024 + 11);
   assert.equal(summary.fileCount, 4);

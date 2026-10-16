@@ -419,7 +419,6 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       const transport = await getTransport();
       if (cancelled) return;
       transportRef.current = transport;
-      dispatch({ type: 'ready', kind: transport.kind, canMutate: transport.canMutate });
 
       subscribe(await transport.onScanProgress((progress) => {
         if (!cancelled) dispatch({ type: 'scan-progress', progress });
@@ -447,6 +446,7 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       dispatch({ type: 'scan-history', history });
       const system = drives.find((drive) => drive.isSystemDrive) ?? drives[0];
       if (system) dispatch({ type: 'select-drive', driveId: system.id });
+      dispatch({ type: 'ready', kind: transport.kind, canMutate: transport.canMutate });
     })().catch((error: unknown) => {
       if (!cancelled) dispatch({ type: 'drives-error', message: describe(error) });
       subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
