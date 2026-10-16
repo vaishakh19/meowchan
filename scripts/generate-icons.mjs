@@ -246,8 +246,8 @@ function encodeIco(sizes) {
     entry[3] = 0; // reserved
     entry.writeUInt16LE(1, 4); // colour planes
     entry.writeUInt16LE(32, 6); // bits per pixel
-    entry.writeUInt32BE(image.data.length, 8);
-    entry.writeUInt32BE(offset, 12);
+    entry.writeUInt32LE(image.data.length, 8);
+    entry.writeUInt32LE(offset, 12);
     offset += image.data.length;
     entries.push(entry);
   }
@@ -273,20 +273,3 @@ for (const [name, data] of outputs) {
   console.log(`wrote src-tauri/icons/${name} (${data.length} bytes)`);
 }
 
-// Windows Store / MSI logos.
-for (const [name, size] of [
-  ['Square30x30Logo.png', 30],
-  ['Square44x44Logo.png', 44],
-  ['Square71x71Logo.png', 71],
-  ['Square89x89Logo.png', 89],
-  ['Square107x107Logo.png', 107],
-  ['Square142x142Logo.png', 142],
-  ['Square150x150Logo.png', 150],
-  ['Square284x284Logo.png', 284],
-  ['Square310x310Logo.png', 310],
-  ['StoreLogo.png', 50],
-]) {
-  const data = encodePng(size);
-  writeFileSync(join(outDir, name), data);
-  console.log(`wrote src-tauri/icons/${name} (${data.length} bytes)`);
-}
