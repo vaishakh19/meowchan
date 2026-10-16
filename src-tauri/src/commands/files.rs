@@ -134,6 +134,7 @@ fn find_index(
 pub fn reveal_in_explorer(path: String) -> AppResult<()> {
     validate_path(&path)?;
     let candidate = PathBuf::from(&path);
+    ensure_exists(&candidate)?;
     platform::reveal_in_explorer(&candidate).map_err(AppError::NotPermitted)
 }
 
@@ -142,7 +143,16 @@ pub fn reveal_in_explorer(path: String) -> AppResult<()> {
 pub fn open_path(path: String) -> AppResult<()> {
     validate_path(&path)?;
     let candidate = PathBuf::from(&path);
+    ensure_exists(&candidate)?;
     platform::open_with_default_app(&candidate).map_err(AppError::NotPermitted)
+}
+
+fn ensure_exists(path: &Path) -> AppResult<()> {
+    match path.try_exists() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(AppError::NotFound(path.display().to_string())),
+        Err(error) => Err(AppError::io(path.display().to_string(), &error)),
+    }
 }
 
 /// Rejects anything that is not a plausible absolute filesystem path.

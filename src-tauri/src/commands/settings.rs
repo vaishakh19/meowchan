@@ -40,9 +40,9 @@ pub fn settings_get(state: State<'_, AppState>) -> AppResult<AppSettings> {
 
     let stored = {
         let guard = state.database()?;
-        guard
-            .as_ref()
-            .and_then(|database| database.load_settings().ok().flatten())
+        guard.as_ref()
+            .ok_or_else(|| AppError::Database("The local database is unavailable; preferences cannot be saved. Check your application data directory permissions.".to_string()))?
+            .load_settings().map_err(AppError::Database)?
     };
 
     let settings = match stored {

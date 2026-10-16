@@ -1,19 +1,4 @@
-/**
- * The single seam between the UI and the outside world.
- *
- * `BackendTransport` describes every operation the app can perform. There are exactly two
- * implementations:
- *
- *  - `TauriTransport` (`./backend/tauriTransport.ts`) — the real product. Talks to the Rust
- *    backend through narrowly-scoped Tauri commands and events.
- *  - `DemoTransport` (`./backend/demo/demoTransport.ts`) — a browser-only fallback used when the
- *    UI is opened in a normal browser (e.g. `npm run dev` previews) where no Tauri runtime
- *    exists. It generates a deterministic synthetic filesystem so the interface can be
- *    reviewed and tested without Windows. It is clearly labelled in the UI and never used in a
- *    packaged build.
- *
- * Nothing else in `src/` is allowed to import `@tauri-apps/*` directly.
- */
+/** Native IPC boundary. A normal browser cannot scan local disks. */
 
 import type {
   AppSettings,
@@ -41,7 +26,7 @@ export interface BackendTransport {
   readonly kind: 'tauri' | 'demo';
   /** Short label shown in the status bar, e.g. `Rust backend` / `Browser preview`. */
   readonly label: string;
-  /** True when destructive operations are actually possible. */
+  /** The analyzer never mutates scanned files. */
   readonly canMutate: boolean;
 
   /* Drives & scanning */

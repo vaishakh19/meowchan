@@ -31,7 +31,7 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content native.log
           if ($code -ne 0) {
-            $message = ((Get-Content native.log -Tail 160) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            $message = ((Get-Content native.log -Tail 40) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Output "::error title=Native diagnostics::$message"
             exit $code
           }
@@ -43,25 +43,12 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content package.log
           if ($code -ne 0) {
-            $message = ((Get-Content package.log -Tail 100) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            $message = ((Get-Content package.log -Tail 40) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Output "::error title=Packaging diagnostics::$message"
             exit $code
           }
-      - name: Launch a renamed executable outside the build tree
-        shell: pwsh
-        run: |
-          $folder = Join-Path $env:RUNNER_TEMP 'Diskora launch test'
-          New-Item -ItemType Directory -Path $folder -Force | Out-Null
-          Copy-Item release/Diskora.exe "$folder/Renamed.exe"
-          $process = Start-Process "$folder/Renamed.exe" -WorkingDirectory $folder -PassThru
-          try {
-            Start-Sleep -Seconds 15
-            $process.Refresh()
-            if ($process.HasExited) { throw "Application exited: $($process.ExitCode)" }
-            if ($process.MainWindowHandle -eq 0) { throw 'No application window appeared' }
-          } finally {
-            if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
-          }
+      - name: Test the actual desktop UI with real files
+        run: node scripts/smoke-windows.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: Diskora-Windows-x64

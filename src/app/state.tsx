@@ -431,7 +431,10 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
 
       const [drives, settings, version, privacy, history] = await Promise.all([
         transport.listDrives().catch(() => [] as DriveInfo[]),
-        transport.settingsGet().catch(() => null),
+        transport.settingsGet().catch(error => {
+          if (!cancelled) toast({ kind: 'warning', title: 'Preferences are unavailable', detail: describe(error) });
+          return null;
+        }),
         transport.appVersion().catch(() => null),
         transport.privacyReport().catch(() => null),
         transport.scanList().catch(() => [] as ScanSummary[]),
@@ -452,7 +455,7 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       cancelled = true;
       subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
     };
-  }, []);
+  }, [toast]);
 
   /* -------------------------------- theme -------------------------------- */
   useEffect(() => {
