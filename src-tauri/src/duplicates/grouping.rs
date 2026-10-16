@@ -156,10 +156,11 @@ fn is_excluded(path: &Path, exclusions: &[String]) -> bool {
     if exclusions.is_empty() {
         return false;
     }
-    let text = path.to_string_lossy().to_lowercase();
+    let text = path.to_string_lossy().to_lowercase().replace('/', "\\");
     exclusions.iter().any(|exclusion| {
         let needle = exclusion.to_lowercase().replace('/', "\\");
-        text.starts_with(&needle) || text.contains(&needle)
+        let needle = needle.trim_end_matches('\\');
+        !needle.is_empty() && (text == needle || text.starts_with(&format!("{needle}\\")))
     })
 }
 
@@ -480,6 +481,17 @@ mod tests {
             ..tiny_file_options()
         };
         assert!(group_by_size(&files, &options).is_empty());
+    }
+
+    #[test]
+    fn exclusions_match_only_the_selected_path_and_descendants() {
+        let exclusions = vec!["C:/Users/me/files/".to_string()];
+        assert!(is_excluded(Path::new(r"C:\Users\me\files\a.bin"), &exclusions));
+        assert!(!is_excluded(Path::new(r"C:\Users\me\files-other\a.bin"), &exclusions));
+        let file = vec![r"C:\a.bin".to_string()];
+        assert!(is_excluded(Path::new(r"C:\a.bin"), &file));
+        assert!(!is_excluded(Path::new(r"C:\a.bin.backup"), &file));
+        assert!(is_excluded(Path::new("/tmp/files/a.bin"), &["/tmp/files".to_string()]));
     }
 
     #[test]

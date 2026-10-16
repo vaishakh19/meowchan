@@ -150,7 +150,7 @@ export function DuplicatesView(): React.JSX.Element {
       {/* ---------------------------- exclusions ---------------------------- */}
       {state.duplicates.excludePaths.length > 0 ? (
         <div className="border-t border-line bg-surface px-3 py-2">
-          <SectionTitle className="px-0 pt-0 pb-1">Excluded folders</SectionTitle>
+          <SectionTitle className="px-0 pt-0 pb-1">Excluded paths</SectionTitle>
           <div className="flex flex-wrap gap-1">
             {state.duplicates.excludePaths.map((path) => (
               <span
@@ -254,7 +254,7 @@ function GroupCard({
                           <Button size="sm" variant="ghost" onClick={() => onReveal(copy.path)} title="Reveal in File Explorer">
                             <FolderOpen aria-hidden className="size-3" />
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => onExclude(copy.path)} title="Exclude this folder">
+                          <Button size="sm" variant="ghost" onClick={() => onExclude(copy.path)} title="Exclude this file">
                             <ShieldOff aria-hidden className="size-3" />
                           </Button>
                         </div>

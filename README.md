@@ -59,7 +59,8 @@ dropped.
 
 Launch Diskora, choose **Scan Drive** or **Scan a folder…**, then explore the
 results. Duplicate search requires a completed scan and reads file contents for
-hashing. It never removes copies. Scanning is cancellable. Inaccessible or
+hashing. The UI defaults to a 1 MiB minimum (adjustable down to 1 KiB); files
+over 5 GiB are skipped to bound hashing work. It never removes copies. Scanning is cancellable. Inaccessible or
 vanished entries produce a partial result with reported errors, not invented
 sizes. Logical sizes can differ from volume usage because of permissions,
 hard links, filesystem metadata, compression, sparse files and concurrent changes.

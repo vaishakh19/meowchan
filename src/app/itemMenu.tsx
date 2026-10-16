@@ -59,7 +59,7 @@ export function ItemMenuProvider({ children }: { children: ReactNode }): React.J
 
       if (state.route === 'duplicates') {
         items.push({
-          label: 'Exclude this folder from duplicate scans',
+          label: `Exclude this ${kind} from duplicate scans`,
           icon: <ShieldOff aria-hidden className="size-3.5" />,
           separatorBefore: true,
           onSelect: () => actions.excludeDuplicatePath(path),
