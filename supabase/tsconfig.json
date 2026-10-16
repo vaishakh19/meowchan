@@ -1,0 +1,25 @@
+{
+  // Type configuration for the Supabase Edge Functions.
+  //
+  // These files run on Deno, not in the browser bundle, and they import each other with explicit
+  // `.ts` extensions — which the app's own tsconfig forbids. They are therefore checked separately:
+  // `deno check` in CI (see `.github/workflows/ci.yml`), and `npx tsc -p supabase/tsconfig.json`
+  // locally if you have Deno's type definitions available.
+  //
+  // The reason they live in this repository at all is that the payload shape, the webhook
+  // signature rules and the licence format are shared contracts: a change on one side that breaks
+  // the other must fail a build, not a customer.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["functions/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules"]
+}

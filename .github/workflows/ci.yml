@@ -1,0 +1,53 @@
+name: Windows build
+on:
+  push:
+    branches: [main, 'arena/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.3'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npm test
+      - run: npm run rust:test
+      - run: npm run app:build
+      - name: Launch a renamed executable outside the build tree
+        shell: pwsh
+        run: |
+          $folder = Join-Path $env:RUNNER_TEMP 'Diskora launch test'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          Copy-Item release/Diskora.exe "$folder/Renamed.exe"
+          $process = Start-Process "$folder/Renamed.exe" -WorkingDirectory $folder -PassThru
+          try {
+            Start-Sleep -Seconds 15
+            $process.Refresh()
+            if ($process.HasExited) { throw "Application exited: $($process.ExitCode)" }
+            if ($process.MainWindowHandle -eq 0) { throw 'No application window appeared' }
+          } finally {
+            if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Diskora-Windows-x64
+          path: release/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Cargo-lock
+          path: src-tauri/Cargo.lock
+          if-no-files-found: ignore

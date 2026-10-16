@@ -1,0 +1,220 @@
+/* ------------------------------------------------------------------ *
+ * Diskwise — design tokens & base styles (Tailwind CSS v4)
+ *
+ * Visual language: warm off-white canvas, charcoal ink, near-black
+ * primary buttons, muted pastel visualization colours, thin neutral
+ * borders, subtle shadows, generous rounding. Everything is defined
+ * here once so components never hard-code colours.
+ * ------------------------------------------------------------------ */
+
+@import 'tailwindcss';
+
+/* Manual dark-mode toggle (class based) in addition to the OS preference. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Surfaces */
+  --color-canvas: #f6f4f0;
+  --color-surface: #fffdfa;
+  --color-surface-sunken: #efece6;
+  --color-surface-raised: #ffffff;
+
+  /* Ink */
+  --color-ink: #24211d;
+  --color-ink-strong: #14120f;
+  --color-ink-muted: #6f6a61;
+  --color-ink-faint: #9b958b;
+
+  /* Lines */
+  --color-line: #e3ded4;
+  --color-line-strong: #d3ccbf;
+
+  /* Brand / interactive */
+  --color-accent: #1f1d1a;
+  --color-accent-hover: #35322d;
+  --color-accent-ink: #fbfaf8;
+
+  /* Semantic */
+  --color-danger: #b4462f;
+  --color-danger-soft: #f6e3dd;
+  --color-warn: #a97a20;
+  --color-warn-soft: #f6eed8;
+  --color-ok: #4c7a52;
+  --color-ok-soft: #e2ecdf;
+  --color-info: #3f6480;
+  --color-info-soft: #e0e8ee;
+
+  /* Storage categories (muted pastels, stable across the app) */
+  --color-cat-system: #c9c2b6;
+  --color-cat-applications: #a0c0d9;
+  --color-cat-games: #c8a0d9;
+  --color-cat-documents: #a0d9a0;
+  --color-cat-media: #d9a0ac;
+  --color-cat-development: #d9d2a0;
+  --color-cat-downloads: #d9bfa0;
+  --color-cat-cache: #a0d2d9;
+  --color-cat-archives: #bfd9a0;
+  --color-cat-other: #cbc7be;
+  --color-cat-free: #e6e2da;
+
+  /* Typography — Windows native stack, no webfont download. */
+  --font-sans:
+    'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Noto Sans', sans-serif;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', ui-monospace, 'Consolas', monospace;
+
+  /* Radii */
+  --radius-panel: 0.625rem;
+  --radius-control: 0.5rem;
+
+  /* Shadows — subtle, low-spread */
+  --shadow-panel: 0 1px 2px rgb(36 33 29 / 0.05), 0 1px 1px rgb(36 33 29 / 0.03);
+  --shadow-pop: 0 8px 24px -6px rgb(36 33 29 / 0.18), 0 2px 6px -2px rgb(36 33 29 / 0.12);
+  --shadow-drag: 0 16px 40px -12px rgb(36 33 29 / 0.28);
+}
+
+/* Dark theme: same tokens, warm charcoal surfaces. */
+.dark {
+  --color-canvas: #1b1917;
+  --color-surface: #232120;
+  --color-surface-sunken: #161514;
+  --color-surface-raised: #2b2826;
+
+  --color-ink: #ece8e1;
+  --color-ink-strong: #fbfaf8;
+  --color-ink-muted: #a49d93;
+  --color-ink-faint: #7c766c;
+
+  --color-line: #37332f;
+  --color-line-strong: #4a453f;
+
+  --color-accent: #ece8e1;
+  --color-accent-hover: #ffffff;
+  --color-accent-ink: #1b1917;
+
+  --color-danger: #e08a76;
+  --color-danger-soft: #3a2620;
+  --color-warn: #d6ac5c;
+  --color-warn-soft: #352c1c;
+  --color-ok: #8bbd8f;
+  --color-ok-soft: #22301f;
+  --color-info: #8db4d1;
+  --color-info-soft: #1e2a33;
+
+  --color-cat-system: #6f6a60;
+  --color-cat-applications: #5b7d9c;
+  --color-cat-games: #7d5b95;
+  --color-cat-documents: #5f8f5f;
+  --color-cat-media: #9c5f6a;
+  --color-cat-development: #8f8a5f;
+  --color-cat-downloads: #9c7d5b;
+  --color-cat-cache: #5b8f8f;
+  --color-cat-archives: #75905f;
+  --color-cat-other: #55514b;
+  --color-cat-free: #2e2b28;
+
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 8px 24px -6px rgb(0 0 0 / 0.6), 0 2px 6px -2px rgb(0 0 0 / 0.4);
+  --shadow-drag: 0 16px 40px -12px rgb(0 0 0 / 0.7);
+}
+
+/* ------------------------------------------------------------------ *
+ * Base
+ * ------------------------------------------------------------------ */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+  }
+
+  /* Windows-native focus ring. */
+  :focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 1px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-info) 30%, transparent);
+  }
+
+  /* Thin, unobtrusive scrollbars that match the chrome. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--color-line-strong);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-ink-faint);
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Utilities
+ * ------------------------------------------------------------------ */
+
+@utility dw-titlebar-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+@utility dw-no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* Numeric alignment for tables and stat readouts. */
+@utility dw-tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility dw-scroll-thin {
+  scrollbar-width: thin;
+}
+
+/* Respect the Windows "reduce motion" setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

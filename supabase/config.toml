@@ -1,0 +1,67 @@
+# Supabase project configuration for the Diskwise licensing backend.
+#
+# This file configures the *local* development project. Production is configured in the Supabase
+# dashboard; see `docs/licensing.md` ("Dev and production environments") for the exact settings and
+# which secrets belong where.
+#
+# Nothing in this file is a secret. Every secret referenced by name here is set with
+# `supabase secrets set` and is never committed.
+
+project_id = "diskwise"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+# The maximum number of rows any single request may return. Licensing tables are small; a large
+# page size would only make a mistake easier to leak.
+max_rows = 200
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+# Local mail catcher. The recovery flow delivers here in development, so a developer can complete a
+# recovery without a real mail provider.
+enabled = true
+port = 54324
+
+[storage]
+enabled = false
+
+[auth]
+enabled = false
+# The desktop app does not authenticate against Supabase. It verifies licences offline with an
+# embedded public key and calls Edge Functions that authenticate with the service-role key. There is
+# deliberately no anon-key-gated client access to the licensing tables.
+
+[realtime]
+enabled = false
+
+[functions]
+# Every function is deployed explicitly. `verify_jwt = false` is correct for the webhook (Dodo does
+# not authenticate) and for the desktop-facing functions (the licence key *is* the credential), and
+# is safe precisely because those functions do their own validation and never trust the caller.
+verify_jwt = false
+
+[functions.create-checkout]
+verify_jwt = false
+
+[functions.dodo-webhook]
+verify_jwt = false
+
+[functions.licence-activate]
+verify_jwt = false
+
+[functions.licence-deactivate]
+verify_jwt = false
+
+[functions.licence-recover]
+verify_jwt = false
