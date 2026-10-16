@@ -310,7 +310,7 @@ pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
                 // Pop one level, but never past a prefix (`C:`) or the root.
                 match normalised.last() {
                     Some(last)
-                        if last != OsString::from("\\")
+                        if last != &OsString::from("\\")
                             && !last.to_string_lossy().ends_with(':') =>
                     {
                         normalised.pop();

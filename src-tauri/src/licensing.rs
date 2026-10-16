@@ -160,7 +160,7 @@ pub struct ProStatus {
     pub enabled: bool,
     pub configured: bool,
     /// Masked key (`ABCD…WXYZ`), when an entitlement is stored.
-    pub license_key: Option<String>;
+    pub license_key: Option<String>,
     pub activated_at: Option<i64>,
     pub last_validated_at: Option<i64>,
     /// True when the active state rests on the offline grace period right now.
@@ -388,7 +388,13 @@ fn stored_entitlement(state: &AppState) -> AppResult<Option<StoredEntitlement>> 
     let database = guard
         .as_ref()
         .ok_or_else(|| AppError::Database("The local database is unavailable; Diskora Pro cannot be activated.".to_string()))?;
-    Ok(database.load_entitlement().map_err(AppError::Database)?)
+    let payload = database.load_entitlement().map_err(AppError::Database)?;
+    match payload {
+        Some(text) => serde_json::from_str::<StoredEntitlement>(&text)
+            .map(Some)
+            .map_err(|error| AppError::Database(format!("The stored entitlement is unreadable: {error}"))),
+        None => Ok(None),
+    }
 }
 
 /// The startup status: fast, honest, and never more optimistic than the last
@@ -498,7 +504,8 @@ fn touch_validated(state: &AppState, entitlement: &StoredEntitlement) -> AppResu
 }
 
 fn save_stored(state: &AppState, entitlement: &StoredEntitlement) -> AppResult<()> {
-    let payload = serde_json::to_string(entitlement).map_err(AppError::Internal)?;
+    let payload = serde_json::to_string(entitlement)
+        .map_err(|error| AppError::Internal(format!("The entitlement could not be serialized: {error}")))?;
     let guard = state.database()?;
     let database = guard
         .as_ref()

@@ -119,7 +119,7 @@ fn find_index(
     path: &Path,
 ) -> Option<std::sync::Arc<std::sync::RwLock<crate::scanner::aggregate::ScanIndex>>> {
     let scans = state.scans().ok()?;
-    let mut best: Option<(i64, std::sync::Arc<crate::scanner::aggregate::ScanIndex>)> = None;
+    let mut best: Option<(i64, std::sync::Arc<std::sync::RwLock<crate::scanner::aggregate::ScanIndex>>)> = None;
     for entry in scans.values() {
         if let Some(index) = entry.index.clone() {
             let contains = index

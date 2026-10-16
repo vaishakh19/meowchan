@@ -150,6 +150,8 @@ impl ScanIndex {
             index,
             children,
             files_by_parent,
+            removed_directories: std::collections::HashSet::new(),
+            removed_files: std::collections::HashSet::new(),
         }
     }
 
