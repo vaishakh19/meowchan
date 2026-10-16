@@ -8,7 +8,7 @@ if (process.platform !== 'win32' || process.arch !== 'x64') {
   process.exit(1);
 }
 const cli = resolve('node_modules/@tauri-apps/cli/tauri.js');
-const result = spawnSync(process.execPath, [cli, 'build', '--ci', '--target', 'x86_64-pc-windows-msvc'], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, [cli, 'build', '--ci', '--target', 'x86_64-pc-windows-msvc', '--', '--locked'], { stdio: 'inherit' });
 if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status ?? 1);
 const release = resolve('src-tauri/target/x86_64-pc-windows-msvc/release');

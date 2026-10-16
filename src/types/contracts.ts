@@ -1,19 +1,4 @@
-/**
- * Diskwise — shared request/response contracts between the React frontend and the Rust backend.
- *
- * This file is the single source of truth for the wire format. Every struct here is mirrored
- * 1:1 by a `#[derive(Serialize, Deserialize)]` struct in `src-tauri/src/**` with
- * `#[serde(rename_all = "camelCase")]`. If you change a field here, change it there too
- * (see `src-tauri/src/commands/contracts.rs`).
- *
- * Wire encoding notes:
- *  - Byte counts are `u64` on the Rust side and `number` in TypeScript. This is exact up to
- *    2^53 bytes (9 PB), far beyond any consumer disk. The Rust side rejects inputs that would
- *    overflow and the frontend never does arithmetic on raw byte counts without `BigInt`-safe
- *    helpers in `src/lib/format.ts`.
- *  - Timestamps are Unix epoch milliseconds (`u64`), `null` when unavailable.
- *  - All paths are OS-native absolute paths. The backend canonicalizes and validates them.
- */
+/** Diskora native IPC contracts. Byte counts are logical u64 values serialized as JS numbers. */
 
 /* ------------------------------------------------------------------ *
  * Drives

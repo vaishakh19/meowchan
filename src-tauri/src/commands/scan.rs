@@ -183,7 +183,10 @@ pub async fn scan_start(
             }
         }
 
+        let failed = entry.index.is_none();
         if let Ok(mut registry) = state.scans() {
+            // Only the current file index stays in RAM; past summaries remain in SQLite.
+            registry.clear();
             registry.insert(walk_id.clone(), Arc::new(entry));
         }
         if let Ok(mut registry) = state.counters.lock() {
@@ -192,7 +195,9 @@ pub async fn scan_start(
         if let Ok(mut registry) = state.cancelled.lock() {
             registry.remove(&walk_id);
         }
-        walk_counters.set_phase(if walk_counters.is_cancelled() {
+        walk_counters.set_phase(if failed {
+            crate::scanner::progress::ScanPhase::Error
+        } else if walk_counters.is_cancelled() {
             crate::scanner::progress::ScanPhase::Cancelled
         } else {
             crate::scanner::progress::ScanPhase::Done
@@ -271,7 +276,7 @@ pub fn scan_list(state: State<'_, AppState>) -> AppResult<Vec<ScanSummary>> {
     // Scan *history* is a paid capability; this list is the in-memory one and stays free.
     let mut summaries: Vec<ScanSummary> = {
         let scans = state.scans()?;
-        let mut collected: Vec<ScanSummary> = scans
+        let collected: Vec<ScanSummary> = scans
             .values()
             .map(|entry| ScanSummary {
                 scan_id: entry.scan_id.clone(),
@@ -525,8 +530,6 @@ fn build_result(entry: &ScanEntry) -> ScanResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn a_child_page_clamps_its_limit() {
         // Guards against a caller asking for a million rows.

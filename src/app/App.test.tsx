@@ -50,3 +50,33 @@ describe('desktop shell with mocked IPC (not a real filesystem test)', () => {
     expect(screen.getByText('Access denied')).toBeDefined();
   });
 });
+
+it('fetches a completed short scan even when no progress event was received', async () => {
+  open.mockResolvedValue('C:\\chosen');
+  const root = { id: 'root', path: 'C:\\chosen', name: 'chosen', kind: 'folder',
+    sizeBytes: 10, diskSizeBytes: null, fileCount: 1, folderCount: 0, modifiedAt: null,
+    createdAt: null, extension: null, category: 'other', accessDenied: false, children: [], synthetic: false };
+  const fallback = invoke.getMockImplementation()!;
+  invoke.mockImplementation(async (command, args) => {
+    if (command === 'scan_start') return 'instant';
+    if (command === 'scan_get') return { scanId: 'instant', rootPath: root.path, rootName: root.name,
+      startedAt: 0, finishedAt: 1, status: 'complete', tree: root, totalBytes: 10,
+      diskTotalBytes: null, fileCount: 1, folderCount: 0, errors: [], truncated: false,
+      prunedNodes: 0, durationMs: 1, expectedBytes: null };
+    return fallback(command, args);
+  });
+  render(<App />);
+  await userEvent.setup().click(screen.getByRole('button', { name: /scan a folder/i }));
+  await waitFor(() => expect(screen.getByTestId('analyzed-size').textContent).toMatch(/10\s*B/));
+});
+
+it('disposes a native subscription that finishes registering after unmount', async () => {
+  let resolveListener!: (callback: () => void) => void;
+  listen.mockImplementationOnce(() => new Promise(resolve => { resolveListener = resolve; }));
+  const view = render(<App />);
+  await waitFor(() => expect(listen).toHaveBeenCalled());
+  view.unmount();
+  const unsubscribe = vi.fn();
+  resolveListener(unsubscribe);
+  await waitFor(() => expect(unsubscribe).toHaveBeenCalledTimes(1));
+});

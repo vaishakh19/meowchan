@@ -10,5 +10,5 @@ pub mod entries;
 pub mod long_path;
 
 pub use classify::classify;
-pub use entries::{EntryMeta, FileRecord, Kind};
+pub use entries::{read_metadata, EntryMeta, FileRecord, Kind};
 pub use long_path::{is_long_path, normalize_long_path, to_unc_long_path};

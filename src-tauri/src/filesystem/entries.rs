@@ -88,7 +88,7 @@ pub fn read_metadata(path: &Path, depth: usize) -> std::io::Result<EntryMeta> {
     let is_hidden = false;
 
     let disk_size = if kind == Kind::File {
-        platform::disk_size(path)
+        platform::disk_size(&os_path)
     } else {
         None
     };

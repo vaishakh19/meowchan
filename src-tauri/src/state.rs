@@ -119,12 +119,14 @@ pub fn entry_from_run(
     let duration_ms = finished_at - started_at;
     let status = if run.cancelled {
         "cancelled".to_string()
+    } else if run.directories.is_empty() {
+        "error".to_string()
     } else if run.errors.is_empty() {
         "complete".to_string()
     } else {
         "partial".to_string()
     };
-    let index = Arc::new(ScanIndex::from_run(&run));
+    let index = if run.directories.is_empty() { None } else { Some(Arc::new(ScanIndex::from_run(&run))) };
     ScanEntry {
         scan_id,
         root_path,
@@ -132,7 +134,7 @@ pub fn entry_from_run(
         started_at,
         finished_at: Some(finished_at),
         status,
-        index: Some(index),
+        index,
         errors: run.errors,
         pruned_nodes: 0,
         expected_bytes,

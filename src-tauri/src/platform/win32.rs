@@ -38,6 +38,7 @@ extern "system" {
     ) -> i32;
     fn GetCompressedFileSizeW(lpFileName: *const u16, lpFileSizeHigh: *mut u32) -> u32;
     fn GetLastError() -> u32;
+    fn SetLastError(dwErrCode: u32);
 }
 
 #[link(name = "shell32")]
@@ -251,7 +252,10 @@ pub fn disk_size(path: &Path) -> Option<u64> {
     let wide_path = wide(path);
     let mut high: u32 = 0;
     // SAFETY: valid wide string; `high` points at a live local.
-    let low = unsafe { GetCompressedFileSizeW(wide_path.as_ptr(), &mut high as *mut u32) };
+    let low = unsafe {
+        SetLastError(0);
+        GetCompressedFileSizeW(wide_path.as_ptr(), &mut high as *mut u32)
+    };
     if low == INVALID_FILE_SIZE && last_error() != 0 {
         return None;
     }

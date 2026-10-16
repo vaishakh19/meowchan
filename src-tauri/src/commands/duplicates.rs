@@ -65,6 +65,10 @@ pub async fn find_duplicates(
             .duplicate_reports
             .lock()
             .map_err(|_| AppError::Internal("The report lock was poisoned.".to_string()))?;
+        if registry.values().any(|report| report.status == "running") {
+            return Err(AppError::InvalidArgument("Duplicate detection is already running.".to_string()));
+        }
+        registry.clear();
         registry.insert(
             report_id.clone(),
             DuplicateReport {
@@ -124,7 +128,6 @@ pub async fn find_duplicates(
             elapsed_ms: started.elapsed().as_millis() as u64,
             eta_ms: None,
         };
-        let report = report;
         let state = progress_app.state::<AppState>();
         if let Ok(mut registry) = state.duplicate_reports.lock() {
             registry.insert(progress_id, report);

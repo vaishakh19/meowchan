@@ -6,4 +6,4 @@
 
 pub mod db;
 
-pub use db::{Database, SCHEMA_VERSION};
+pub use db::{Database};

@@ -32,7 +32,7 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content native.log
           if ($code -ne 0) {
-            $message = ((Get-Content native.log -Tail 40) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            $message = (((Get-Content native.log | Select-String -Pattern '^error|^failures:|FAILED|panicked at|test result:' -Context 0,5 | ForEach-Object { $_.ToString() }) -join "`n") | ForEach-Object { $_.Substring([Math]::Max(0, $_.Length - 6000)) }).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Output "::error title=Native diagnostics::$message"
             exit $code
           }

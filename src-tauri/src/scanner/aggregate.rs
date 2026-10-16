@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::filesystem::classify;
-use crate::scanner::walker::{DirectoryRecord, FileRecord, ScanRun};
+use crate::scanner::walker::{DirectoryRecord, ScanRun};
+use crate::filesystem::FileRecord;
 
 /// Children kept per folder in the tree sent to the UI.
 pub const DEFAULT_MAX_CHILDREN: usize = 100;
@@ -261,7 +262,6 @@ pub fn prune_tree(index: &ScanIndex, root: usize, options: PruneOptions) -> Prun
         let candidate = build_limited(index, root, max_children, middle);
         if count_nodes(&candidate.tree) <= max_nodes {
             low = middle;
-            result = candidate;
         } else {
             high = middle - 1;
         }
@@ -455,7 +455,7 @@ pub fn stable_path_id(path: &Path) -> String {
     let bytes = path.to_string_lossy().as_bytes().to_vec();
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in bytes {
-        hash ^= *byte as u64;
+        hash ^= byte as u64;
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{hash:016x}")
