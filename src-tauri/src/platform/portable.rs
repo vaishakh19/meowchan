@@ -75,3 +75,17 @@ pub fn reveal_in_explorer(path: &Path) -> Result<(), String> {
         path.display()
     ))
 }
+
+/// The filesystem of the volume holding `path`. Unknown off Windows.
+pub fn volume_filesystem(_path: &Path) -> Option<String> {
+    None
+}
+
+/// Recycle Bin deletion is a Windows shell operation; other platforms get an
+/// honest refusal rather than a silent permanent delete.
+pub fn recycle_bin_delete(path: &Path) -> Result<(), String> {
+    Err(format!(
+        "Moving {} to the Recycle Bin is only available on Windows.",
+        path.display()
+    ))
+}

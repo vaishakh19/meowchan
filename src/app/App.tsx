@@ -15,12 +15,14 @@ import { AppStateProvider, useApp } from './state';
 import { TitleBar } from './TitleBar';
 import { Sidebar } from './Sidebar';
 import { DetailsPanel } from './DetailsPanel';
+import { DeleteConfirmDialog } from './DeleteConfirmDialog';
 import { ToastHost } from '@/components/ui/feedback';
 import { ItemMenuProvider } from './itemMenu';
 import { AnalyzeView } from '@/features/scanner/AnalyzeView';
 import { LargeFilesView } from '@/features/scanner/LargeFilesView';
 import { DuplicatesView } from '@/features/duplicates/DuplicatesView';
 import { HistoryView } from '@/features/scanner/HistoryView';
+import { ProView } from '@/features/pro/ProView';
 import { SettingsView } from '@/features/settings/SettingsView';
 import { PrivacyView } from '@/features/settings/PrivacyView';
 import { HomeView } from '@/features/scanner/HomeView';
@@ -65,11 +67,13 @@ function Shell(): React.JSX.Element {
           {state.route === 'large-files' ? <LargeFilesView /> : null}
           {state.route === 'duplicates' ? <DuplicatesView /> : null}
           {state.route === 'history' ? <HistoryView /> : null}
+          {state.route === 'pro' ? <ProView /> : null}
           {state.route === 'settings' ? <SettingsView /> : null}
           {state.route === 'privacy' ? <PrivacyView /> : null}
         </main>
         <DetailsPanel />
       </div>
+      <DeleteConfirmDialog />
       <ToastHost toasts={state.toasts} onDismiss={actions.dismissToast} />
     </div>
   );

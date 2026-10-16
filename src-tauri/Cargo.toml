@@ -21,8 +21,13 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Local database (settings and scan history).
+# Local database (settings, scan history, Pro entitlement).
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# HTTPS calls to Dodo Payments' public license endpoints (Pro activation
+# and validation). Already in the dependency tree via Tauri; declared here
+# because the licensing module calls it directly. No API key is ever held.
+reqwest = { version = "0.13", features = ["json"] }
 
 # Cryptographic hashing for duplicate detection.
 sha2 = "0.10"

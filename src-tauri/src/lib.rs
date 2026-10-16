@@ -1,8 +1,11 @@
-//! Diskora: local disk analysis. No deletion or network service.
+//! Diskora: local disk analysis. Free features are read-only; the two Pro
+//! capabilities (guarded Recycle Bin deletion and full-path display) are gated
+//! by Dodo Payments licence verification in `licensing` and `commands::pro`.
 pub mod commands;
 pub mod duplicates;
 pub mod error;
 pub mod filesystem;
+pub mod licensing;
 pub mod platform;
 pub mod scanner;
 pub mod settings;
@@ -60,6 +63,12 @@ pub fn run() {
             commands::settings::settings_update,
             commands::settings::privacy_report,
             commands::settings::app_version,
+            commands::pro::pro_status,
+            commands::pro::pro_verify,
+            commands::pro::pro_checkout,
+            commands::pro::pro_activate,
+            commands::pro::pro_restore,
+            commands::delete::delete_items,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Diskora");

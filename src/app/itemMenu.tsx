@@ -2,15 +2,16 @@
  * Item context menu.
  *
  * The menu is defined in one place so every surface (sunburst, treemap, file list, large files,
- * duplicates) offers exactly the same safe actions. There is no delete entry: destructive work
- * happens only in the cleanup assistant, behind a confirmation dialog that lists the exact paths.
+ * duplicates) offers exactly the same actions. The two Pro actions — safe deletion to the
+ * Recycle Bin and full-path copying — are visible but locked until a verified purchase.
  */
 
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react';
-import { Copy, Crosshair, FolderOpen, ExternalLink, ShieldOff } from 'lucide-react';
+import { Copy, Crosshair, FolderOpen, ExternalLink, ShieldOff, Trash2 } from 'lucide-react';
 import { useContextMenu, type ContextMenuItem } from '@/components/ui/ContextMenu';
 import { useApp } from './state';
 import { isSyntheticPath } from '@/lib/tree';
+import { ProBadge } from '@/components/ui/primitives';
 
 interface ItemMenuApi {
   /** Opens the menu for `path` at viewport coordinates. */
@@ -26,6 +27,8 @@ export function ItemMenuProvider({ children }: { children: ReactNode }): React.J
   const open = useCallback(
     (path: string, x: number, y: number, kind: 'file' | 'folder' = 'folder') => {
       const synthetic = isSyntheticPath(path);
+      const pro = state.pro?.enabled === true;
+      const isScanRoot = path === state.scan.result?.rootPath;
       const items: ContextMenuItem[] = [
         {
           label: 'Reveal in File Explorer',
@@ -40,9 +43,28 @@ export function ItemMenuProvider({ children }: { children: ReactNode }): React.J
           onSelect: () => void actions.open(path),
         },
         {
-          label: 'Copy full path',
+          label: (
+            <span className="flex items-center gap-1.5">
+              Copy full path
+              {!pro ? <ProBadge /> : null}
+            </span>
+          ),
           icon: <Copy aria-hidden className="size-3.5" />,
-          onSelect: () => void actions.copyPath(path),
+          onSelect: () => actions.copyPath(path),
+        },
+        {
+          label: (
+            <span className="flex items-center gap-1.5">
+              Move to Recycle Bin
+              {!pro ? <ProBadge /> : null}
+            </span>
+          ),
+          icon: <Trash2 aria-hidden className="size-3.5" />,
+          danger: true,
+          // The scan root keeps the tree navigable; synthetic aggregates
+          // have no filesystem entry; links are refused by the backend.
+          disabled: synthetic || isScanRoot,
+          onSelect: () => actions.requestDeletion([path]),
         },
         {
           label: 'Focus in visualization',
@@ -54,7 +76,6 @@ export function ItemMenuProvider({ children }: { children: ReactNode }): React.J
             actions.focusPath(path);
           },
         },
-
       ];
 
       if (state.route === 'duplicates') {
@@ -68,7 +89,7 @@ export function ItemMenuProvider({ children }: { children: ReactNode }): React.J
 
       menu.open(x, y, items);
     },
-    [actions, menu, state.route],
+    [actions, menu, state.route, state.pro?.enabled, state.scan.result?.rootPath],
   );
 
   const value = useMemo<ItemMenuApi>(() => ({ open }), [open]);

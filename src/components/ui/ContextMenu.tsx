@@ -10,7 +10,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { cx } from './primitives';
 
 export interface ContextMenuItem {
-  label: string;
+  /** Text, or a small composition (e.g. label + Pro badge). */
+  label: ReactNode;
   onSelect: () => void;
   icon?: ReactNode;
   disabled?: boolean;
@@ -52,7 +53,7 @@ export function useContextMenu(): {
       onClick={(event) => event.stopPropagation()}
     >
       {state.items.map((item, index) => (
-        <div key={item.label}>
+        <div key={typeof item.label === 'string' ? item.label : index}>
           {item.separatorBefore && index > 0 ? <div className="my-1 h-px bg-line" role="separator" /> : null}
           <button
             type="button"

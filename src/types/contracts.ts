@@ -335,6 +335,58 @@ export interface AppVersion {
 }
 
 /* ------------------------------------------------------------------ *
+ * Diskora Pro (licensing)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The licence state as verified by the native backend against Dodo
+ * Payments. `enabled` is never decided by the frontend: it mirrors a
+ * server-verified entitlement (or a recently verified one during the
+ * documented offline grace window).
+ */
+export interface ProStatus {
+  /** True when a verified Diskora Pro purchase is active on this device. */
+  enabled: boolean;
+  /** False when this build has no Dodo Payments product configured. */
+  configured: boolean;
+  /** Masked key (`ABCD…WXYZ`), when an entitlement is stored. */
+  licenseKey: string | null;
+  activatedAt: number | null;
+  lastValidatedAt: number | null;
+  /** True when the active state rests on the offline grace period right now. */
+  offline: boolean;
+  /** Human-readable explanation of the current state. */
+  message: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Safe deletion (Pro)
+ * ------------------------------------------------------------------ */
+
+export interface DeleteItemsRequest {
+  scanId: string;
+  paths: string[];
+}
+
+export interface DeletedItem {
+  path: string;
+  name: string;
+  kind: 'file' | 'folder';
+  sizeBytes: number;
+}
+
+export interface DeleteFailure {
+  path: string;
+  reason: string;
+}
+
+/** Per-item results: a failure never hides what succeeded, or vice versa. */
+export interface DeleteOutcome {
+  deleted: DeletedItem[];
+  failed: DeleteFailure[];
+}
+
+/* ------------------------------------------------------------------ *
  * Settings & privacy
  * ------------------------------------------------------------------ */
 

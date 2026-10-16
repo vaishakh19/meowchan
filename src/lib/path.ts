@@ -144,6 +144,16 @@ export function joinPath(...parts: Array<string | null | undefined>): string {
  * True when `child` is `parent` or lives inside it. Comparison is segment-based so
  * `C:\Users\Bob` is NOT inside `C:\Users\Bobbie`.
  */
+/**
+ * Middle-ellipsis form of a long path, e.g. `C:\Users\…\report.pdf`.
+ * Used while Diskora Pro is locked: the path stays recognisable and
+ * copyable-by-eye without revealing the complete absolute path.
+ */
+export function maskPath(path: string): string {
+  if (path.length <= 64) return path;
+  return `${path.slice(0, 40)}…${path.slice(-20)}`;
+}
+
 export function isWithin(child: string, parent: string): boolean {
   const c = normalizePath(child).toLowerCase();
   const p = normalizePath(parent).toLowerCase();

@@ -33,6 +33,7 @@
   --color-accent: #1f1d1a;
   --color-accent-hover: #35322d;
   --color-accent-ink: #fbfaf8;
+  --color-accent-soft: #ece7dd;
 
   /* Semantic */
   --color-danger: #b4462f;
@@ -90,6 +91,7 @@
   --color-accent: #ece8e1;
   --color-accent-hover: #ffffff;
   --color-accent-ink: #1b1917;
+  --color-accent-soft: #35302a;
 
   --color-danger: #e08a76;
   --color-danger-soft: #3a2620;

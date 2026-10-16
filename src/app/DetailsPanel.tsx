@@ -1,14 +1,16 @@
 /**
  * Right details panel (~280px).
  *
- * Shows everything Diskora knows about the current selection and nothing more — there is no
- * "delete" button anywhere in this panel. Destructive actions live in the cleanup assistant,
- * behind an explicit confirmation that lists the exact paths.
+ * Shows everything Diskora knows about the current selection and nothing more.
+ * The full path and the delete action are Diskora Pro features: they are
+ * visible but locked until a verified purchase, and deletion only ever
+ * happens through the confirmation dialog after the native backend's
+ * safety checks.
  */
 
 import { useMemo } from 'react';
-import { Crosshair, Copy, ExternalLink, FolderOpen, Info, ShieldCheck } from 'lucide-react';
-import { Badge, Button, EmptyState, Panel, SectionTitle, Skeleton, cx } from '@/components/ui/primitives';
+import { Crosshair, Copy, ExternalLink, FolderOpen, Info, Lock, ShieldCheck, Trash2 } from 'lucide-react';
+import { Badge, Button, EmptyState, Panel, ProBadge, SectionTitle, Skeleton, cx } from '@/components/ui/primitives';
 import { FileIcon } from '@/lib/icons';
 import { categoryColor, categoryLabel } from '@/lib/categories';
 import {
@@ -18,14 +20,15 @@ import {
   formatDateTime,
   formatRelativeTime,
 } from '@/lib/format';
-import { baseName, parentPath } from '@/lib/path';
+import { baseName, maskPath, parentPath } from '@/lib/path';
 import { findNode, largestChildren } from '@/features/visualization/layout';
 import { isSyntheticPath } from '@/lib/tree';
 import { useApp } from './state';
 
 export function DetailsPanel(): React.JSX.Element {
   const { state, actions } = useApp();
-  const { details, scan, viz } = state;
+  const { details, scan, viz, pro } = state;
+  const proEnabled = pro?.enabled === true;
   const node = useMemo(() => {
     const cached = scan.result && viz.selectedPath ? findNode(scan.result.tree, viz.selectedPath) : null;
     const live = details.data?.path === viz.selectedPath ? details.data : null;
@@ -34,6 +37,7 @@ export function DetailsPanel(): React.JSX.Element {
 
   const selected = viz.selectedPath !== null;
   const synthetic = viz.selectedPath ? isSyntheticPath(viz.selectedPath) : false;
+  const isScanRoot = viz.selectedPath === scan.result?.rootPath;
 
   return (
     <aside
@@ -94,9 +98,16 @@ export function DetailsPanel(): React.JSX.Element {
               </div>
             </div>
 
-            <p className="mt-2 break-all rounded-control bg-surface-sunken px-2 py-1.5 font-mono text-[10px] leading-relaxed text-ink-muted">
-              {viz.selectedPath}
-            </p>
+            <div className="mt-2 flex items-center gap-1.5">
+              <p
+                className="min-w-0 flex-1 break-all rounded-control bg-surface-sunken px-2 py-1.5 font-mono text-[10px] leading-relaxed text-ink-muted"
+                data-testid="details-path"
+                title={proEnabled ? viz.selectedPath ?? '' : 'The full path is a Diskora Pro feature'}
+              >
+                {proEnabled ? viz.selectedPath : maskPath(viz.selectedPath ?? '')}
+              </p>
+              {!proEnabled ? <ProBadge /> : null}
+            </div>
 
             <div className="mt-2 flex flex-wrap gap-1">
               <Button
@@ -108,9 +119,15 @@ export function DetailsPanel(): React.JSX.Element {
                 <FolderOpen aria-hidden className="size-3" />
                 Reveal
               </Button>
-              <Button size="sm" onClick={() => void actions.copyPath(viz.selectedPath!)}>
+              <Button
+                size="sm"
+                onClick={() => void actions.copyPath(viz.selectedPath!)}
+                title={proEnabled ? 'Copy the complete absolute path' : 'Diskora Pro feature'}
+                data-testid="copy-path"
+              >
                 <Copy aria-hidden className="size-3" />
                 Copy path
+                {!proEnabled ? <ProBadge /> : null}
               </Button>
               {node?.kind === 'file' ? (
                 <Button size="sm" onClick={() => void actions.open(viz.selectedPath!)} disabled={synthetic}>
@@ -124,6 +141,30 @@ export function DetailsPanel(): React.JSX.Element {
                   Focus
                 </Button>
               ) : null}
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => actions.requestDeletion([viz.selectedPath!])}
+                disabled={synthetic || isScanRoot}
+                title={
+                  synthetic
+                    ? 'This is a display aggregate, not a real folder'
+                    : isScanRoot
+                      ? 'The scanned folder itself cannot be deleted'
+                      : proEnabled
+                        ? 'Move to the Windows Recycle Bin after confirmation'
+                        : 'Diskora Pro feature'
+                }
+                data-testid="delete-item"
+              >
+                {proEnabled ? (
+                  <Trash2 aria-hidden className="size-3" />
+                ) : (
+                  <Lock aria-hidden className="size-3" />
+                )}
+                Delete
+                {!proEnabled ? <ProBadge /> : null}
+              </Button>
             </div>
           </Panel>
 
@@ -213,9 +254,19 @@ export function DetailsPanel(): React.JSX.Element {
 
           <Panel className="flex items-start gap-2 p-2.5">
             <ShieldCheck aria-hidden className="mt-px size-3.5 shrink-0 text-ok" />
-            <p className="text-[10px] leading-relaxed text-ink-muted">
-              Diskora does not delete or move files. Use Reveal in File Explorer to manage your files manually.
-            </p>
+            {proEnabled ? (
+              <p className="text-[10px] leading-relaxed text-ink-muted">
+                Deletion moves items to the Windows Recycle Bin, after a
+                confirmation listing the exact name, path and size. Links
+                and junctions are never followed.
+              </p>
+            ) : (
+              <p className="text-[10px] leading-relaxed text-ink-muted">
+                Safe deletion to the Recycle Bin and full-path copying are
+                Diskora Pro features. Use Reveal in File Explorer to manage
+                files manually.
+              </p>
+            )}
           </Panel>
         </>
       )}

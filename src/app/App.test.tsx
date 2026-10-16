@@ -8,6 +8,17 @@ const { invoke, open, listen } = vi.hoisted(() => ({ invoke: vi.fn(), open: vi.f
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open }));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
+
+const LOCKED_PRO_STATUS = {
+  enabled: false,
+  configured: true,
+  licenseKey: null,
+  activatedAt: null,
+  lastValidatedAt: null,
+  offline: false,
+  message: 'Diskora Pro is not active on this device.',
+};
+
 beforeEach(() => {
   invoke.mockReset(); open.mockReset(); listen.mockReset();
   listen.mockResolvedValue(vi.fn());
@@ -15,33 +26,50 @@ beforeEach(() => {
     if (command === 'settings_get') return { theme: 'system', followLinks: false, maxChildrenPerNode: 100 };
     if (command === 'list_drives') return [];
     if (command === 'scan_list') return [];
+    if (command === 'pro_status') return LOCKED_PRO_STATUS;
     return null;
   });
   __setTransport(createTauriTransport());
 });
 afterEach(() => { cleanup(); __setTransport(null); });
+
 describe('desktop shell with mocked IPC (not a real filesystem test)', () => {
-  it('renders the analyzer without cleanup or billing controls', async () => {
+  it('renders the analyzer with free features intact and an upgrade path', async () => {
     render(<App />);
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('list_drives', undefined));
+    // Free capabilities stay reachable without payment.
     expect(screen.getByRole('button', { name: /duplicate finder/i })).toBeDefined();
-    expect(screen.queryByRole('button', { name: /cleanup|upgrade|buy/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /scan drive/i })).toBeDefined();
+    // The upgrade path is visible; nothing is unlocked by its presence.
+    expect(screen.getByRole('button', { name: /upgrade to pro/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: /diskora pro/i })).toBeDefined();
   });
+
+  it('fetches the licence state at startup and keeps Pro locked without a purchase', async () => {
+    render(<App />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('pro_status', undefined));
+    // The locked licence state never enables Pro-only behaviour.
+    await waitFor(() => expect(screen.getByTestId('upgrade-to-pro')).toBeDefined());
+    expect(screen.queryByTestId('pro-badge')).toBeNull();
+  });
+
   it('opens a folder picker, then sends the chosen path to Rust', async () => {
-    open.mockResolvedValue('C:\\chosen');
+    open.mockResolvedValue('C:\\\\chosen');
     render(<App />);
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /scan a folder/i }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('scan_start', { options: {
-      rootPath: 'C:\\chosen', followLinks: false, maxChildrenPerNode: 100,
+      rootPath: 'C:\\\\chosen', followLinks: false, maxChildrenPerNode: 100,
     } }));
   });
+
   it('does not scan when the folder dialog is cancelled', async () => {
     open.mockResolvedValue(null);
     render(<App />);
     await userEvent.setup().click(screen.getByRole('button', { name: /scan a folder/i }));
     expect(invoke.mock.calls.filter(([command]) => command === 'scan_start')).toHaveLength(0);
   });
+
   it('shows a native error rather than claiming a scan succeeded', async () => {
     open.mockRejectedValue(new Error('Access denied'));
     render(<App />);
@@ -52,8 +80,8 @@ describe('desktop shell with mocked IPC (not a real filesystem test)', () => {
 });
 
 it('fetches a completed short scan even when no progress event was received', async () => {
-  open.mockResolvedValue('C:\\chosen');
-  const root = { id: 'root', path: 'C:\\chosen', name: 'chosen', kind: 'folder',
+  open.mockResolvedValue('C:\\\\chosen');
+  const root = { id: 'root', path: 'C:\\\\chosen', name: 'chosen', kind: 'folder',
     sizeBytes: 10, diskSizeBytes: null, fileCount: 1, folderCount: 0, modifiedAt: null,
     createdAt: null, extension: null, category: 'other', accessDenied: false, children: [], synthetic: false };
   const fallback = invoke.getMockImplementation()!;

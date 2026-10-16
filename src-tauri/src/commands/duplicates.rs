@@ -96,8 +96,12 @@ pub async fn find_duplicates(
         let started = std::time::Instant::now();
         let mut last_emit = std::time::Instant::now();
 
+        // The index is shared with live readers; hold a read guard for
+        // the duration of the grouping so a concurrent deletion cannot
+        // observe a half-built report.
+        let index_guard = index.read().expect("the scan index lock was poisoned");
         let report = grouping::build_report(
-            &index.files,
+            &index_guard.files,
             &progress_options,
             progress_id.clone(),
             started_at,

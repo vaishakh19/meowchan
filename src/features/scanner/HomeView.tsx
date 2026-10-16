@@ -44,7 +44,7 @@ export function HomeView(): React.JSX.Element {
         <p className="mt-1 max-w-2xl text-xs leading-relaxed text-ink-muted">
           {result
             ? `Last scan of ${result.rootName} finished ${formatDateTime(result.finishedAt ?? result.startedAt)} in ${formatDuration(result.durationMs ?? 0)}.`
-            : 'Diskora scans a drive, maps every folder by real size, and helps you find what is using space. Everything runs locally on this PC — nothing is uploaded.'}
+            : 'Diskora scans a drive, maps every folder by real size, and helps you find what is using space. Everything runs locally on this PC — nothing is uploaded. Only Diskora Pro license checks ever leave the machine, and only if you choose to buy Pro.'}
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button

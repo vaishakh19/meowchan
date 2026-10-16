@@ -8,11 +8,14 @@
  * browser build never pulls the Tauri runtime in.
  */
 
-import type { Event } from '@tauri-apps/api/event';
+import { invoke as coreInvoke } from '@tauri-apps/api/core';
+import { listen as coreListen, type Event } from '@tauri-apps/api/event';
 import type {
   AppSettings,
   AppVersion,
   ChildrenPage,
+  DeleteItemsRequest,
+  DeleteOutcome,
   DriveInfo,
   DuplicateOptions,
   DuplicateProgress,
@@ -22,6 +25,7 @@ import type {
   LargeFilePage,
   LargeFileQuery,
   PrivacyReport,
+  ProStatus,
   ScanOptions,
   ScanProgress,
   ScanResult,
@@ -31,14 +35,15 @@ import type { BackendTransport, Unsubscribe } from '@/lib/transport';
 
 type Args = Record<string, unknown>;
 
+// The Tauri APIs are imported statically on purpose: this whole module is only
+// ever loaded lazily (see lib/transport.ts), so a browser build never pulls the
+// Tauri runtime in. Static imports also keep every call on one module instance.
 async function invoke<T>(command: string, args?: Args): Promise<T> {
-  const core = await import('@tauri-apps/api/core');
-  return core.invoke<T>(command, args);
+  return coreInvoke<T>(command, args);
 }
 
 async function listen<T>(event: string, handler: (payload: T) => void): Promise<Unsubscribe> {
-  const api = await import('@tauri-apps/api/event');
-  const unsubscribe = await api.listen<T>(event, (raw: Event<T>) => handler(raw.payload));
+  const unsubscribe = await coreListen<T>(event, (raw: Event<T>) => handler(raw.payload));
   return () => {
     unsubscribe();
   };
@@ -51,7 +56,8 @@ export function createTauriTransport(): BackendTransport {
   return {
     kind: 'tauri',
     label: 'Rust backend',
-    canMutate: false,
+    // Only the guarded, Pro-gated Recycle Bin deletion mutates the filesystem.
+    canMutate: true,
 
     /* Drives & scanning */
     listDrives: () => invoke<DriveInfo[]>('list_drives'),
@@ -85,6 +91,16 @@ export function createTauriTransport(): BackendTransport {
     settingsUpdate: (patch: Partial<AppSettings>) => invoke<AppSettings>('settings_update', { patch }),
     privacyReport: () => invoke<PrivacyReport>('privacy_report'),
     appVersion: () => invoke<AppVersion>('app_version'),
+
+    /* Diskora Pro */
+    proStatus: () => invoke<ProStatus>('pro_status'),
+    proVerify: () => invoke<ProStatus>('pro_verify'),
+    proCheckout: () => invoke<{ url: string }>('pro_checkout'),
+    proActivate: (licenseKey: string) => invoke<ProStatus>('pro_activate', { licenseKey }),
+    proRestore: () => invoke<ProStatus>('pro_restore'),
+
+    /* Safe deletion (Pro) */
+    deleteItems: (request: DeleteItemsRequest) => invoke<DeleteOutcome>('delete_items', { request }),
 
     /* Events */
     onScanProgress: (handler: (progress: ScanProgress) => void) =>

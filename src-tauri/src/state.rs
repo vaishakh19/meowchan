@@ -18,7 +18,10 @@ pub struct ScanEntry {
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub status: String,
-    pub index: Option<Arc<ScanIndex>>,
+    /// The scan tables are immutable; post-scan deletions mutate the index
+    /// through this lock so live readers (tree pages, details, large files)
+    /// stay consistent without cloning a potentially huge snapshot.
+    pub index: Option<Arc<std::sync::RwLock<ScanIndex>>>,
     pub errors: Vec<crate::scanner::walker::WalkError>,
     pub pruned_nodes: usize,
     pub expected_bytes: Option<u64>,
@@ -126,7 +129,7 @@ pub fn entry_from_run(
     } else {
         "partial".to_string()
     };
-    let index = if run.directories.is_empty() { None } else { Some(Arc::new(ScanIndex::from_run(&run))) };
+    let index = if run.directories.is_empty() { None } else { Some(Arc::new(std::sync::RwLock::new(ScanIndex::from_run(&run)))) };
     ScanEntry {
         scan_id,
         root_path,

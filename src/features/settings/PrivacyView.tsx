@@ -14,11 +14,11 @@ import { Button, EmptyState, Panel, SectionTitle } from '@/components/ui/primiti
 const NEVER = [
   'No account is required and none is created.',
   'No files, file names or paths are uploaded — ever.',
-  'No full-path analytics or telemetry.',
-  'No ads, no sponsored results, no bundled toolbars.',
-  'No hidden or background scanning: a scan only runs while you are looking at it, and it stops when you cancel.',
+  'No telemetry, analytics or ads of any kind.',
+  'No background scanning: a scan only runs while you are looking at it, and it stops when you cancel.',
   'Files are only opened with their default application when you explicitly choose Open.',
   'Diskora never elevates privileges or asks for administrator rights to scan a folder you can already read.',
+  'Nothing is ever deleted permanently: Pro deletion moves items to the Windows Recycle Bin, only after a confirmation listing the exact items.',
 ];
 
 export function PrivacyView(): React.JSX.Element {
@@ -113,9 +113,11 @@ export function PrivacyView(): React.JSX.Element {
         </Panel>
 
         <Panel className="p-3">
-          <SectionTitle className="px-0 pt-0">Read-only analysis</SectionTitle>
+          <SectionTitle className="px-0 pt-0">Your files stay in charge</SectionTitle>
           <p className="text-[11px] leading-relaxed text-ink-muted">
-            Diskora does not delete or move your files. Use Reveal in File Explorer to manage files manually.
+            The free analyzer never modifies anything. With Diskora Pro you can move items to the
+            Windows Recycle Bin — always behind a confirmation dialog, always recoverable, never
+            permanent.
           </p>
           <Button size="sm" className="mt-2" variant="secondary" onClick={() => actions.navigate('settings')}>
             Open settings

@@ -13,6 +13,7 @@ import { useMemo } from 'react';
 import {
   Clock,
   Copy,
+  Crown,
   FileSearch,
   FolderSearch,
   FolderTree,
@@ -25,7 +26,7 @@ import {
   Square,
   X,
 } from 'lucide-react';
-import { Button, Divider, Panel, ProgressBar, SectionTitle, cx } from '@/components/ui/primitives';
+import { Button, Divider, Panel, ProBadge, ProgressBar, SectionTitle, cx } from '@/components/ui/primitives';
 import { StorageRing } from '@/components/ui/StorageRing';
 import { formatBytes, formatCount, formatDuration, formatPercent } from '@/lib/format';
 import { categoryColor } from '@/lib/categories';
@@ -38,6 +39,7 @@ const NAV: Array<{ route: Route; label: string; icon: typeof Home; pro?: boolean
   { route: 'large-files', label: 'Large Files', icon: FileSearch },
   { route: 'duplicates', label: 'Duplicate Finder', icon: Copy },
   { route: 'history', label: 'Scan History', icon: History },
+  { route: 'pro', label: 'Diskora Pro', icon: Crown, pro: true },
   { route: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -103,7 +105,7 @@ export function Sidebar(): React.JSX.Element {
             >
               <Icon aria-hidden className="size-3.5 shrink-0" />
               <span className="flex-1 truncate">{item.label}</span>
-
+              {item.pro && !state.pro?.enabled ? <ProBadge /> : null}
             </button>
           );
         })}

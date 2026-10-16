@@ -4,6 +4,8 @@ import type {
   AppSettings,
   AppVersion,
   ChildrenPage,
+  DeleteItemsRequest,
+  DeleteOutcome,
   DriveInfo,
   DuplicateOptions,
   DuplicateProgress,
@@ -13,6 +15,7 @@ import type {
   LargeFilePage,
   LargeFileQuery,
   PrivacyReport,
+  ProStatus,
   ScanOptions,
   ScanProgress,
   ScanResult,
@@ -26,7 +29,10 @@ export interface BackendTransport {
   readonly kind: 'tauri' | 'demo';
   /** Short label shown in the status bar, e.g. `Rust backend` / `Browser preview`. */
   readonly label: string;
-  /** The analyzer never mutates scanned files. */
+  /**
+   * True when the backend can mutate the filesystem. Only the guarded,
+   * Pro-gated Recycle Bin deletion can — and it must confirm first.
+   */
   readonly canMutate: boolean;
 
   /* Drives & scanning */
@@ -44,6 +50,19 @@ export interface BackendTransport {
   fileDetails(path: string): Promise<FileDetails>;
   revealInExplorer(path: string): Promise<void>;
   openPath(path: string): Promise<void>;
+
+  /* Diskora Pro */
+  /** Cached licence state; fast, no network. */
+  proStatus(): Promise<ProStatus>;
+  /** Forces a fresh check with Dodo Payments. */
+  proVerify(): Promise<ProStatus>;
+  /** Opens the configured Dodo Payments checkout in the browser. */
+  proCheckout(): Promise<{ url: string }>;
+  proActivate(licenseKey: string): Promise<ProStatus>;
+  proRestore(): Promise<ProStatus>;
+
+  /* Safe deletion (Pro) */
+  deleteItems(request: DeleteItemsRequest): Promise<DeleteOutcome>;
 
   /* Duplicates */
   findDuplicates(options: DuplicateOptions): Promise<string>;

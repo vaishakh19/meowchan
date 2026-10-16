@@ -1,14 +1,15 @@
 # Diskora
 
-A local, read-only Windows disk space analyzer. Scan a drive or folder, explore its
+A local Windows disk space analyzer. Scan a drive or folder, explore its
 sunburst/treemap/file list, find large files, identify SHA-256 content duplicates,
 and review local scan summaries. No account, paid service, API key, telemetry,
 backend server, or administrator access is required.
 
-**Scope:** this minimal edition does not delete or move files, sell licences,
-schedule scans, or export reports. Use **Reveal in File Explorer** for manual file
-management. The previous cleanup/billing implementation was removed rather than
-shipping unsafe deletion or unfinished service integrations.
+**Free, and always free:** scanning, filtering, size calculations, large-file
+listing and duplicate detection. **Diskora Pro** (one-time $12.99, no
+subscription) adds safe file deletion through the Windows Recycle Bin and full
+absolute path display with copy. See the [Pro page](PRO-SETUP.md) for merchant
+setup and purchase testing.
 
 ## Run the verified Windows build
 
@@ -75,6 +76,21 @@ over 5 GiB are skipped to bound hashing work. It never removes copies. Scanning 
 vanished entries produce a partial result with reported errors, not invented
 sizes. Logical sizes can differ from volume usage because of permissions,
 hard links, filesystem metadata, compression, sparse files and concurrent changes.
+
+**Deleting files (Pro):** select items and choose **Delete**. Diskora confirms
+the exact name, path, size and type of every item first, then moves it to the
+Windows Recycle Bin through the shell — always recoverable, never permanent,
+never following links or junctions, never touching drive roots, the scanned
+folder itself, or protected system locations. A failed item is reported per
+item; the scan results refresh immediately.
+
+**Paths (Pro):** the details panel shows the full absolute path of the selected
+item, with **Copy path**. Without Pro, paths are shown masked in the middle.
+
+**Diskora Pro** is verified against Dodo Payments on every activation, restore
+and deletion — a licence is a server-checked purchase, not a local flag.
+Purchases can be restored after a reinstall. Network use is limited to these
+licence checks; everything else stays on your machine.
 
 Scan trees are pruned for display; the file list pages through the underlying
 index. A scan defaults to a one-million-entry safety limit and reports truncation

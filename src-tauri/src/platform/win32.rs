@@ -41,6 +41,19 @@ extern "system" {
     fn SetLastError(dwErrCode: u32);
 }
 
+#[link(name = "ole32")]
+extern "system" {
+    fn CoInitializeEx(pvReserved: *mut c_void, dwCoInit: u32) -> i32;
+    fn CoUninitialize();
+    fn CoCreateInstance(
+        rclsid: *const Guid,
+        pUnkOuter: *mut c_void,
+        dwClsContext: u32,
+        riid: *const Guid,
+        ppv: *mut *mut c_void,
+    ) -> i32;
+}
+
 #[link(name = "shell32")]
 extern "system" {
     fn ShellExecuteW(
@@ -51,6 +64,105 @@ extern "system" {
         lpDirectory: *const u16,
         nShowCmd: i32,
     ) -> *mut c_void;
+    fn SHCreateItemFromParsingName(
+        pszPath: *const u16,
+        pbc: *const c_void,
+        riid: *const Guid,
+        ppv: *mut *mut c_void,
+    ) -> i32;
+}
+
+/// A COM GUID, laid out exactly as the ABI expects.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Guid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
+
+const fn guid(data1: u32, data2: u16, data3: u16, data4: [u8; 8]) -> Guid {
+    Guid { data1, data2, data3, data4 }
+}
+
+// CLSID_FileOperations {3AD05575-8857-4850-9277-11B85BDB8E09}
+const CLSID_FILE_OPERATIONS: Guid = guid(
+    0x3AD05575,
+    0x8857,
+    0x4850,
+    [0x92, 0x77, 0x11, 0xB8, 0x5B, 0xDB, 0x8E, 0x09],
+);
+// IID_IFileOperation {947AAB5F-0A5C-4C13-B4D6-4BFB7836FC9F}
+const IID_I_FILE_OPERATION: Guid = guid(
+    0x947AAB5F,
+    0x0A5C,
+    0x4C13,
+    [0xB4, 0xD6, 0x4B, 0xFB, 0x78, 0x36, 0xFC, 0x9F],
+);
+// IID_IShellItem {43826D1E-E718-42EE-BC55-A1E261C37BFE}
+const IID_I_SHELL_ITEM: Guid = guid(
+    0x43826D1E,
+    0xE718,
+    0x42EE,
+    [0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE],
+);
+
+// IFileOperation operation flags (FILEOP_FLAGS).
+const FOF_SILENT: u32 = 0x4;
+const FOF_NOCONFIRMATION: u32 = 0x10;
+const FOF_ALLOWUNDO: u32 = 0x40;
+const FOF_NOERRORUI: u32 = 0x400;
+
+const COINIT_APARTMENTTHREADED: u32 = 2;
+const CLSCTX_ALL: u32 = 23;
+
+/// The `IFileOperation` vtable. Slots are declared in COM order; only the ones
+/// Diskora uses are given precise signatures, but every slot exists so the
+/// indices of `perform_operations` and friends are correct.
+#[repr(C)]
+struct IFileOperationVTable {
+    query_interface: unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+    advise: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut u32) -> i32,
+    unadvise: unsafe extern "system" fn(*mut c_void, u32) -> i32,
+    set_operation_flags: unsafe extern "system" fn(*mut c_void, u32) -> i32,
+    set_progress_message: unsafe extern "system" fn(*mut c_void, *const u16) -> i32,
+    set_progress_dialog: unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32,
+    set_properties: unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32,
+    set_owner_window: unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32,
+    apply_operations_to_item: unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32,
+    delete_item: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void) -> i32,
+    delete_items: unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32,
+    copy_item: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *const u16, *mut c_void) -> i32,
+    copy_items: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> i32,
+    move_item: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *const u16, *mut c_void) -> i32,
+    move_items: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> i32,
+    rename_item: unsafe extern "system" fn(*mut c_void, *mut c_void, *const u16, *mut c_void) -> i32,
+    rename_items: unsafe extern "system" fn(*mut c_void, *mut c_void, *const u16, *mut c_void) -> i32,
+    new_item: unsafe extern "system" fn(*mut c_void, *mut c_void, u32, *const u16, *const u16, *mut c_void) -> i32,
+    perform_operations: unsafe extern "system" fn(*mut c_void) -> i32,
+    get_any_operations_aborted: unsafe extern "system" fn(*mut c_void, *mut i32) -> i32,
+}
+
+#[repr(C)]
+struct IFileOperation {
+    vtable: *const IFileOperationVTable,
+}
+
+/// The first three slots of every COM interface. `IShellItem` is only used as
+/// an opaque token here, so this is all Diskora ever needs of it.
+#[repr(C)]
+struct IUnknownVTable {
+    query_interface: unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+}
+
+#[repr(C)]
+struct IShellItem {
+    vtable: *const IUnknownVTable,
 }
 
 const DRIVE_UNKNOWN: u32 = 0;
@@ -300,4 +412,133 @@ pub fn reveal_in_explorer(path: &Path) -> Result<(), String> {
         Ok(_) => Ok(()),
         Err(error) => Err(format!("Could not start File Explorer: {error}")),
     }
+}
+
+/* --------------------------- recycle bin delete --------------------------- */
+
+/// The filesystem of the volume holding `path` (`NTFS`, `FAT32`, …), or `None`
+/// when it cannot be determined. Deletion only recycles on filesystems whose
+/// volumes have a Recycle Bin.
+pub fn volume_filesystem(path: &Path) -> Option<String> {
+    let text = path.to_string_lossy().to_string();
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 || bytes[1] != b':' || !bytes[0].is_ascii_alphabetic() {
+        return None; // UNC and already-normalised paths have no simple root here
+    }
+    let root = format!("{}\\", &text[..2]);
+    let wide_root = wide(Path::new(&root));
+
+    let mut name_buf = [0u16; 64];
+    let mut serial: u32 = 0;
+    let mut max_component: u32 = 0;
+    let mut flags: u32 = 0;
+    // SAFETY: buffers are correctly sized locals; the wide root outlives the call.
+    let ok = unsafe {
+        SetLastError(0);
+        GetVolumeInformationW(
+            wide_root.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            &mut serial as *mut u32,
+            &mut max_component as *mut u32,
+            &mut flags as *mut u32,
+            name_buf.as_mut_ptr(),
+            name_buf.len() as u32,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let end = name_buf.iter().position(|c| *c == 0).unwrap_or(name_buf.len());
+    let name = String::from_utf16_lossy(&name_buf[..end]).trim().to_string();
+    if name.is_empty() { None } else { Some(name) }
+}
+
+/// Moves one file or folder to the Windows Recycle Bin through the shell's
+/// `IFileOperation` with `FOF_ALLOWUNDO`. The operation is undoable by design:
+/// if the volume has no Recycle Bin the call fails instead of deleting.
+///
+/// Callers must have validated the path first — this function does not re-check
+/// protections; it is the last step of a guarded pipeline.
+pub fn recycle_bin_delete(path: &Path) -> Result<(), String> {
+    // SAFETY: COM is initialised for this thread only, and every interface
+    // pointer obtained below is released before returning. No pointer escapes.
+    unsafe {
+        let co = CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED);
+        // S_OK (0) or S_FALSE (1, already initialised) are both fine.
+        if co != 0 && co != 1 {
+            return Err(format!("Windows could not start a shell operation (code {co})."));
+        }
+        let result = recycle_bin_delete_com(path);
+        CoUninitialize();
+        result
+    }
+}
+
+/// SAFETY: the caller must hold a COM apartment initialisation for this thread.
+unsafe fn recycle_bin_delete_com(path: &Path) -> Result<(), String> {
+    let mut operation: *mut c_void = std::ptr::null_mut();
+    let created = CoCreateInstance(
+        &CLSID_FILE_OPERATIONS as *const Guid,
+        std::ptr::null_mut(),
+        CLSCTX_ALL,
+        &IID_I_FILE_OPERATION as *const Guid,
+        &mut operation,
+    );
+    if created != 0 || operation.is_null() {
+        return Err(format!("Windows could not create the recycle operation (code {created})."));
+    }
+    let operation = operation as *const IFileOperation;
+
+    // Diskora shows its own confirmation dialog and reports errors itself, so
+    // the shell stays quiet; ALLOWUNDO is what routes the delete to the
+    // Recycle Bin instead of permanent removal.
+    let flags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI;
+    let flagged = ((*(*operation).vtable).set_operation_flags)(operation as *mut c_void, flags);
+    if flagged != 0 {
+        release(operation as *mut c_void);
+        return Err(format!("Windows refused the recycle flags for {} (code {flagged}).", path.display()));
+    }
+
+    // Extended-length form keeps deep paths working, matching the scanner.
+    let wide_path = crate::filesystem::long_path::to_unc_long_path(path);
+    let mut item: *mut c_void = std::ptr::null_mut();
+    let item_created = SHCreateItemFromParsingName(
+        wide(&wide_path).as_ptr(),
+        std::ptr::null(),
+        &IID_I_SHELL_ITEM as *const Guid,
+        &mut item,
+    );
+    if item_created != 0 || item.is_null() {
+        release(operation as *mut c_void);
+        return Err(format!("Windows could not read {} (code {item_created}).", path.display()));
+    }
+
+    let deleted = ((*(*operation).vtable).delete_item)(operation as *mut c_void, item, std::ptr::null_mut());
+    release(item as *mut c_void);
+    if deleted != 0 {
+        release(operation as *mut c_void);
+        return Err(format!("Windows refused to move {} to the Recycle Bin (code {deleted}).", path.display()));
+    }
+
+    let performed = ((*(*operation).vtable).perform_operations)(operation as *mut c_void);
+    let mut aborted: i32 = 0;
+    let _ = ((*(*operation).vtable).get_any_operations_aborted)(operation as *mut c_void, &mut aborted);
+    release(operation as *mut c_void);
+
+    if performed != 0 {
+        return Err(format!("Moving {} to the Recycle Bin failed (Windows code {performed}).", path.display()));
+    }
+    if aborted != 0 {
+        return Err(format!("Moving {} to the Recycle Bin was aborted by the system.", path.display()));
+    }
+    Ok(())
+}
+
+/// Releases a COM interface through its `IUnknown` vtable.
+///
+/// SAFETY: `interface` must be a valid, owned COM interface pointer.
+unsafe fn release(interface: *mut c_void) -> u32 {
+    let vtable = *(interface as *const *const IUnknownVTable);
+    ((*vtable).release)(interface)
 }
