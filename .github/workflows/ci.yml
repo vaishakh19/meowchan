@@ -24,6 +24,7 @@ jobs:
           workspaces: src-tauri
           cache-on-failure: true
       - run: npm ci
+      - run: npm run typecheck
       - name: Native tests
         shell: pwsh
         run: |
@@ -82,9 +83,11 @@ jobs:
           name: Cargo-lock
           path: src-tauri/Cargo.lock
           if-no-files-found: ignore
-      # Session-only delivery: the sandbox cannot reach Actions artifact storage.
+      # Session-only delivery: the authoring sandbox cannot reach
+      # Actions artifact storage, so verified binaries are committed
+      # back to the working branch once every check above passed.
       - name: Deliver verified binaries to the session branch
-        if: github.ref == 'refs/heads/arena/d1f1769d-meowchan'
+        if: github.ref == 'refs/heads/arena/1d439cf2-meowchan'
         shell: pwsh
         run: |
           git config user.name "Diskora build"
@@ -92,4 +95,4 @@ jobs:
           git add src-tauri/Cargo.lock
           git add -f release/Diskora.exe release/Diskora-setup.exe
           git commit -m "Deliver Windows build and dependency lock [skip ci]"
-          git push origin HEAD:arena/d1f1769d-meowchan
+          git push origin HEAD:arena/1d439cf2-meowchan

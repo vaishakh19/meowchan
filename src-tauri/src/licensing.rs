@@ -284,12 +284,15 @@ pub struct DodoClient {
 }
 
 impl DodoClient {
-    pub fn new(api_base: String) -> Self {
+    /// Builds the HTTP client. Falls back to no proxy configuration
+    /// errors: a client that cannot be built is reported, never
+    /// silently defaulted.
+    pub fn new(api_base: String) -> Result<Self, String> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .build()
-            .unwrap_or_default();
-        Self { client, api_base }
+            .map_err(|error| format!("Could not create the HTTP client: {error}"))?;
+        Ok(Self { client, api_base })
     }
 
     /// Activates `license_key` on this device. Dodo enforces the product's activation
@@ -408,7 +411,7 @@ pub async fn verified_decision(state: &AppState) -> AppResult<ProDecision> {
     let Some(entitlement) = stored_entitlement(state)? else {
         return Ok(ProDecision::Locked);
     };
-    let client = DodoClient::new(config().api_base);
+    let client = DodoClient::new(config().api_base).map_err(AppError::Licence)?;
     let validation = client
         .validate(&entitlement.license_key, entitlement.instance_id.as_deref())
         .await;
@@ -452,7 +455,8 @@ pub async fn activate(state: &AppState, license_key: &str) -> AppResult<ProStatu
     let key = normalize_key(license_key)
         .ok_or_else(|| AppError::InvalidArgument("Enter the license key exactly as Dodo Payments emailed it.".to_string()))?;
     let device = device_name();
-    let activation = DodoClient::new(config().api_base)
+    let client = DodoClient::new(config().api_base).map_err(AppError::Licence)?;
+    let activation = client
         .activate(&key, &device)
         .await
         .map_err(AppError::Licence)?;
