@@ -10,6 +10,17 @@ schedule scans, or export reports. Use **Reveal in File Explorer** for manual fi
 management. The previous cleanup/billing implementation was removed rather than
 shipping unsafe deletion or unfinished service integrations.
 
+## Run the verified Windows build
+
+The delivered ZIP includes source and the tested Windows x64 build. On Windows
+10/11, open **`release/Diskora-setup.exe`** and then launch **Diskora** from the
+Start menu. No development tools are needed to run it. Alternatively, launch
+`release/Diskora.exe` directly if WebView2 is already installed.
+
+These binaries are **unsigned**; Windows may show an unknown-publisher/SmartScreen
+warning. Check the download's origin before choosing to run it. See
+`release/SHA256SUMS.txt` for the delivered file hashes.
+
 ## Build on Windows x64
 
 Install only:
@@ -86,5 +97,6 @@ application. Browser opening is deliberately rejected, not filled with demo data
 
 **Release status:** see `VERIFICATION.md` for tests actually completed and remaining
 limitations. Do not treat configured CI steps as proof they have passed. Installer
-installation/uninstallation on a fresh Windows VM, interactive accessibility/DPI
-checks, and signing/SmartScreen reputation require separate release validation.
+installation/uninstallation passed on Windows Server 2022 CI. A clean Windows
+10/11 machine without WebView2, interactive accessibility/DPI checks, and
+signing/SmartScreen reputation still require separate release validation.
