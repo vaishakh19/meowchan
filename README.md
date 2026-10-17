@@ -5,11 +5,27 @@ sunburst/treemap/file list, find large files, identify SHA-256 content duplicate
 and review local scan summaries. No account, paid service, API key, telemetry,
 backend server, or administrator access is required.
 
-**Free, and always free:** scanning, filtering, size calculations, large-file
-listing and duplicate detection. **Diskora Pro** (one-time $12.99, no
-subscription) adds safe file deletion through the Windows Recycle Bin and full
-absolute path display with copy. See the [Pro page](PRO-SETUP.md) for merchant
-setup and purchase testing.
+**Free, and always free:** scanning, the sunburst, treemap and file list, filtering,
+size calculations, large-file listing and duplicate detection.
+
+**Diskora Pro** (one-time $12.99, no subscription, no account) unlocks the three
+features that act on or expose real files:
+
+| | Free | Pro |
+| --- | --- | --- |
+| Scan, sunburst, treemap, file list, large files, duplicates | Yes | Yes |
+| File names and sizes | Yes | Yes |
+| Item paths | Masked, e.g. `C:\...\Videos\clip.mp4` | Complete absolute path |
+| Copy full path | Locked (Pro badge, opens the upgrade dialog) | Yes |
+| Reveal in File Explorer / open a file | Locked | Yes |
+| Delete to the Windows Recycle Bin (after confirmation) | Locked | Yes |
+| CSV export (contains full paths) | Locked | Yes |
+
+Locked controls stay visible with a lock icon and a **Pro** badge. Activating one
+opens the upgrade dialog, which shows the price and the license key, activate and
+restore steps. Free users never receive a real path from the native backend: the
+webview only gets opaque identity tokens and masked display strings. See the
+[Pro page](PRO-SETUP.md) for merchant setup, state reference and purchase testing.
 
 ## Current build status
 
@@ -98,7 +114,9 @@ hard links, filesystem metadata, compression, sparse files and concurrent change
 Opening the frontend in a normal browser displays **“Run inside the desktop app”**;
 there is no synthetic filesystem or demo scan data.
 
-**Deleting files (Pro):** select items and choose **Delete**. Diskora confirms
+**Deleting files (Pro):** select items and choose **Delete**. Without a valid
+license the control is locked and opens the upgrade dialog; the backend refuses the
+command as well. Diskora confirms
 the exact name, path, size and type of every item first, then requests a move to
 the Windows Recycle Bin through the shell. It never calls a permanent-delete API
 or falls back to permanent removal; if a path fails a safety check or Windows
@@ -106,12 +124,19 @@ refuses the Recycle Bin operation, that item is reported as failed. Links,
 junctions, drive roots, the scanned folder itself and protected system locations
 are refused. The scan index refreshes after successful moves.
 
-**Paths (Pro):** the details panel shows the full absolute path of the selected
-item, with **Copy path**. Without Pro, paths are shown masked in the middle.
+**Paths:** without a valid Pro license Diskora never sends a real path to the
+webview. Items show their name and a masked path (drive, `...`, and the last one or
+two folder names, for example `C:\...\Videos\clip.mp4`). With Pro, the details
+panel shows the complete absolute path, with **Copy path** and **Reveal in File
+Explorer**. The rule is enforced in the Rust backend (`src-tauri/src/disclosure.rs`),
+which rewrites every outbound payload and error message; the UI only displays what
+it receives.
 
-**Diskora Pro** is verified against Dodo Payments on activation, restore and
-before deletion. Deletion requires a fresh successful validation; offline grace
-never authorizes a destructive action. The entitlement is encrypted with
+**Diskora Pro** is verified against Dodo Payments on activation, on restore, when
+the app starts with a stored license (one background validation request), and
+before every deletion. Deletion requires a fresh successful validation; offline
+grace never authorizes a destructive action. A revoked, refunded, expired or
+over-limit key is removed and the app falls back to Free with a clear message. The entitlement is encrypted with
 user-scoped Windows DPAPI before it is stored in SQLite. Network use is limited
 to the allowlisted Dodo licensing endpoints; everything else stays on your machine.
 

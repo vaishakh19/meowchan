@@ -13,7 +13,7 @@
 
 import { shownPath } from '@/lib/path';
 import { useState } from 'react';
-import { Copy, FolderOpen, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Copy, FolderOpen, Lock, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useApp } from '@/app/state';
 import { useItemMenu } from '@/app/itemMenu';
 import {
@@ -173,6 +173,7 @@ export function DuplicatesView(): React.JSX.Element {
                 expanded={expanded === group.groupId}
                 onToggle={() => setExpanded(expanded === group.groupId ? null : group.groupId)}
                 onReveal={(path) => void actions.reveal(path)}
+                proLocked={state.pro?.enabled !== true}
                 onExclude={(path, label) => actions.excludeDuplicatePath(path, label)}
                 onVerify={(pathA, pathB) => actions.verifyDuplicateFiles(pathA, pathB)}
                 onContextMenu={(path, x, y) => itemMenu.open(path, x, y, 'file')}
@@ -215,6 +216,7 @@ function GroupCard({
   expanded,
   onToggle,
   onReveal,
+  proLocked,
   onExclude,
   onVerify,
   onContextMenu,
@@ -223,6 +225,8 @@ function GroupCard({
   expanded: boolean;
   onToggle: () => void;
   onReveal: (path: string) => void;
+  /** True on the free tier: Reveal is shown locked and opens the upgrade dialog. */
+  proLocked: boolean;
   onExclude: (path: string, label?: string) => void;
   onVerify: (pathA: string, pathB: string) => Promise<DuplicateVerifyResult>;
   onContextMenu: (path: string, x: number, y: number) => void;
@@ -332,8 +336,14 @@ function GroupCard({
                       </td>
                       <td className="px-2.5 py-1.5">
                         <div className="flex items-center gap-1">
-                          <Button size="sm" variant="ghost" onClick={() => onReveal(copy.path)} title="Reveal in File Explorer">
-                            <FolderOpen aria-hidden className="size-3" />
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => onReveal(copy.path)}
+                            title={proLocked ? 'Reveal in File Explorer is a Diskora Pro feature' : 'Reveal in File Explorer'}
+                            aria-label={proLocked ? 'Reveal in File Explorer (Diskora Pro)' : 'Reveal in File Explorer'}
+                          >
+                            {proLocked ? <Lock aria-hidden className="size-3" /> : <FolderOpen aria-hidden className="size-3" />}
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => onExclude(copy.path, shownPath(copy))} title="Exclude this file">
                             <ShieldOff aria-hidden className="size-3" />
