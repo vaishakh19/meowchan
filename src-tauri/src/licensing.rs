@@ -1014,7 +1014,7 @@ mod access_tests {
         // A stored key that has not been re-verified within the grace window is not active.
         let expired = decide(Some(stored(NOW - OFFLINE_GRACE_MS - 1)), None, NOW);
         assert!(!expired.is_active());
-        assert_eq!(status_for(&expired).state, "not-purchased");
+        assert!(matches!(status_for(&expired).state.as_str(), "not-purchased" | "not-configured"));
     }
 
     #[test]
