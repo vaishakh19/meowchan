@@ -753,7 +753,7 @@ mod tests {
             group_id: "g".to_string(),
             size_bytes: 10,
             reclaimable_bytes: 10,
-            copies: [first, second]
+            copies: [first.clone(), second.clone()]
                 .iter()
                 .map(|path| DuplicateFile {
                     path: path.to_string_lossy().to_string(),
