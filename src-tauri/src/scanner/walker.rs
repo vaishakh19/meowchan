@@ -72,6 +72,8 @@ pub struct DirectoryRecord {
     pub depth: usize,
     pub modified_at: Option<i64>,
     pub created_at: Option<i64>,
+    pub is_symlink: bool,
+    pub is_junction: bool,
     /// The directory itself could not be read.
     pub access_denied: bool,
 }
@@ -181,6 +183,8 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
                 depth: 0,
                 modified_at: meta.modified_at,
                 created_at: meta.created_at,
+                is_symlink: meta.is_symlink,
+                is_junction: meta.is_junction,
                 access_denied: false,
             });
         }
@@ -350,12 +354,7 @@ fn scan_directory(
             continue;
         }
 
-        // Links are recorded but never traversed unless the caller opts in. This is what stops
-        // junction loops and double counting.
-        if meta.is_symlink && !options.follow_links {
-            counters.add_folder();
-            continue;
-        }
+        let is_link = meta.is_symlink || meta.is_junction;
 
         match meta.kind {
             Kind::File => {
@@ -370,11 +369,36 @@ fn scan_directory(
                         extension: meta.extension.clone(),
                         parent_path: dir.to_path_buf(),
                         depth: meta.depth,
+                        is_symlink: meta.is_symlink,
+                        is_junction: meta.is_junction,
+                        is_cloud_placeholder: meta.is_cloud_placeholder,
+                        cloud_status: meta.cloud_status.clone(),
                     });
                 });
             }
             Kind::Folder => {
                 counters.add_folder();
+
+                // Links and junctions are recorded in the directory table so the UI shows them,
+                // but we never traverse them unless the caller explicitly opted in.
+                // This prevents recursive loops and double counting.
+                if is_link && !options.follow_links {
+                    record(output, |out| {
+                        out.directories.push(DirectoryRecord {
+                            path: path.clone(),
+                            name: meta.name.clone(),
+                            parent: None,
+                            depth: meta.depth,
+                            modified_at: meta.modified_at,
+                            created_at: meta.created_at,
+                            is_symlink: meta.is_symlink,
+                            is_junction: meta.is_junction,
+                            access_denied: false,
+                        });
+                    });
+                    continue;
+                }
+
                 let key = canonical_key(&path);
                 let fresh = match visited.lock() {
                     Ok(mut guard) => guard.insert(key),
@@ -400,6 +424,8 @@ fn scan_directory(
                         depth: meta.depth,
                         modified_at: meta.modified_at,
                         created_at: meta.created_at,
+                        is_symlink: meta.is_symlink,
+                        is_junction: meta.is_junction,
                         access_denied: false,
                     });
                 });

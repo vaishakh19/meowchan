@@ -6,11 +6,12 @@
  * guessing what the app is doing.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ChevronRight,
   Clock,
   Crosshair,
+  Download,
   FolderTree,
   LayoutGrid,
   List,
@@ -18,6 +19,7 @@ import {
   RotateCcw,
   Search,
   ShieldAlert,
+  Users,
   ZoomIn,
 } from 'lucide-react';
 import { useItemMenu } from '@/app/itemMenu';
@@ -25,6 +27,7 @@ import { useApp, useFocusNode } from '@/app/state';
 import { Sunburst } from '@/features/visualization/Sunburst';
 import { Treemap } from '@/features/visualization/Treemap';
 import { FileList } from '@/features/visualization/FileList';
+import { UserStorageView } from '@/features/scanner/UserStorageView';
 import {
   Badge,
   Button,
@@ -47,11 +50,35 @@ export function AnalyzeView(): React.JSX.Element {
   const { scan, viz } = state;
   const focusNode = useFocusNode();
   const result = scan.result;
+  const [showUserStorage, setShowUserStorage] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
   const itemMenu = useItemMenu();
   const openMenu = (path: string, x: number, y: number) =>
     itemMenu.open(path, x, y, focusNode?.children.find((child) => child.path === path)?.kind ?? 'folder');
 
   const crumbs = useMemo(() => (result ? breadcrumbs(result.rootPath) : []), [result]);
+
+  const handleExportCsv = async () => {
+    if (!result) return;
+    setExporting(true);
+    try {
+      const transport = await import('@/lib/transport').then((m) => m.getTransport());
+      const csv = await transport.exportScanCsv({ scanId: result.scanId, exportType: 'all-files' });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `diskora-scan-${result.scanId}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      actions.toast({ kind: 'success', title: 'Exported CSV', detail: 'Complete scan results exported to CSV.' });
+    } catch (err) {
+      actions.toast({ kind: 'error', title: 'Export failed', detail: String(err) });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   if (scan.scanning) {
     return (
@@ -203,6 +230,25 @@ export function AnalyzeView(): React.JSX.Element {
         </span>
 
         <div className="ml-auto flex items-center gap-1">
+          <Button
+            size="sm"
+            variant={showUserStorage ? 'primary' : 'secondary'}
+            onClick={() => setShowUserStorage(!showUserStorage)}
+            title="View storage attribution per user profile"
+          >
+            <Users aria-hidden className="size-3" />
+            User Profiles
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => void handleExportCsv()}
+            disabled={exporting}
+            title="Export scan results to CSV"
+          >
+            <Download aria-hidden className="size-3" />
+            {exporting ? 'Exporting…' : 'Export CSV'}
+          </Button>
           {result.truncated ? (
             <Badge tone="warn" className="mr-1">
               {formatCount(result.prunedNodes)} items folded into “Other”
@@ -236,6 +282,11 @@ export function AnalyzeView(): React.JSX.Element {
       </div>
 
       {/* --------------------------- visualization --------------------------- */}
+      {showUserStorage ? (
+        <div className="relative min-h-0 flex-1 bg-surface">
+          <UserStorageView onClose={() => setShowUserStorage(false)} />
+        </div>
+      ) : (
       <div className="relative min-h-0 flex-1">
         {viz.mode === 'sunburst' ? (
           <Sunburst
@@ -279,6 +330,7 @@ export function AnalyzeView(): React.JSX.Element {
           />
         )}
       </div>
+      )}
 
       {/* ------------------------------ footer ------------------------------ */}
       <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line bg-surface px-3 py-1.5">

@@ -80,6 +80,11 @@ impl Database {
                         payload TEXT NOT NULL
                     );
 
+                    CREATE TABLE IF NOT EXISTS scan_snapshots (
+                        scan_id TEXT PRIMARY KEY,
+                        snapshot_json TEXT NOT NULL,
+                        created_at INTEGER NOT NULL
+                    );
         "#).map_err(|error| error.to_string())?;
         Ok(())
     }
@@ -222,6 +227,36 @@ impl Database {
             .execute("DELETE FROM pro_entitlement WHERE id = 1", [])
             .map_err(|error| error.to_string())?;
         Ok(())
+    }
+
+    /* ----------------------------- scan snapshots ----------------------------- */
+
+    pub fn save_scan_snapshot(&self, scan_id: &str, snapshot_json: &str) -> Result<(), String> {
+        let connection = self.lock()?;
+        let now = crate::time::now_millis();
+        connection
+            .execute(
+                "INSERT INTO scan_snapshots (scan_id, snapshot_json, created_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(scan_id) DO UPDATE SET
+                    snapshot_json = excluded.snapshot_json,
+                    created_at = excluded.created_at",
+                params![scan_id, snapshot_json, now],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn load_scan_snapshot(&self, scan_id: &str) -> Result<Option<String>, String> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT snapshot_json FROM scan_snapshots WHERE scan_id = ?1",
+                params![scan_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {

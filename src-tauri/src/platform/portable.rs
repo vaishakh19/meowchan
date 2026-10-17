@@ -89,3 +89,93 @@ pub fn recycle_bin_delete(path: &Path) -> Result<(), String> {
         path.display()
     ))
 }
+
+/* ------------------------ storage breakdown ------------------------ */
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageBreakdownItem {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub size_bytes: Option<u64>,
+    pub item_count: Option<u64>,
+    pub status: String,
+    pub path: Option<String>,
+    pub description: String,
+    pub actionable_explanation: String,
+    pub is_system_protected: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageBreakdownReport {
+    pub drive_id: String,
+    pub drive_path: String,
+    pub measured_at: i64,
+    pub total_drive_bytes: u64,
+    pub free_drive_bytes: u64,
+    pub items: Vec<StorageBreakdownItem>,
+    pub notes: Vec<String>,
+}
+
+pub fn inspect_storage_breakdown(drive_root_str: &str) -> StorageBreakdownReport {
+    StorageBreakdownReport {
+        drive_id: drive_root_str.trim_end_matches(['\\', '/']).to_string(),
+        drive_path: drive_root_str.to_string(),
+        measured_at: crate::time::now_millis(),
+        total_drive_bytes: 0,
+        free_drive_bytes: 0,
+        items: vec![
+            StorageBreakdownItem {
+                id: "recycle-bin".to_string(),
+                name: "Recycle Bin".to_string(),
+                category: "other".to_string(),
+                size_bytes: None,
+                item_count: None,
+                status: "unsupported".to_string(),
+                path: None,
+                description: "Windows Recycle Bin query is not supported on this platform.".to_string(),
+                actionable_explanation: "Only available on Windows.".to_string(),
+                is_system_protected: false,
+            },
+            StorageBreakdownItem {
+                id: "system-restore-vss".to_string(),
+                name: "System Restore & Shadow Copies".to_string(),
+                category: "system".to_string(),
+                size_bytes: None,
+                item_count: None,
+                status: "unsupported".to_string(),
+                path: None,
+                description: "Windows Volume Shadow Copies (VSS) are only supported on Windows.".to_string(),
+                actionable_explanation: "Only available on Windows.".to_string(),
+                is_system_protected: true,
+            },
+            StorageBreakdownItem {
+                id: "hibernation-file".to_string(),
+                name: "Hibernation File (hiberfil.sys)".to_string(),
+                category: "system".to_string(),
+                size_bytes: None,
+                item_count: None,
+                status: "unsupported".to_string(),
+                path: None,
+                description: "Windows Fast Startup / Hibernation file is only present on Windows.".to_string(),
+                actionable_explanation: "Only available on Windows.".to_string(),
+                is_system_protected: true,
+            },
+            StorageBreakdownItem {
+                id: "virtual-memory".to_string(),
+                name: "Virtual Memory (pagefile.sys)".to_string(),
+                category: "system".to_string(),
+                size_bytes: None,
+                item_count: None,
+                status: "unsupported".to_string(),
+                path: None,
+                description: "Windows paging and swap files are only present on Windows.".to_string(),
+                actionable_explanation: "Only available on Windows.".to_string(),
+                is_system_protected: true,
+            },
+        ],
+        notes: vec!["Windows storage breakdown APIs are only available on Windows.".to_string()],
+    }
+}

@@ -35,6 +35,40 @@ export interface DriveInfo {
 }
 
 /* ------------------------------------------------------------------ *
+ * Storage Breakdown
+ * ------------------------------------------------------------------ */
+
+export type StorageItemStatus =
+  | 'measured'
+  | 'estimated'
+  | 'inaccessible'
+  | 'not-configured'
+  | 'unsupported';
+
+export interface StorageBreakdownItem {
+  id: string;
+  name: string;
+  category: StorageCategory;
+  sizeBytes: number | null;
+  itemCount: number | null;
+  status: StorageItemStatus;
+  path?: string | null;
+  description: string;
+  actionableExplanation: string;
+  isSystemProtected: boolean;
+}
+
+export interface StorageBreakdownReport {
+  driveId: string;
+  drivePath: string;
+  measuredAt: number;
+  totalDriveBytes: number;
+  freeDriveBytes: number;
+  items: StorageBreakdownItem[];
+  notes: string[];
+}
+
+/* ------------------------------------------------------------------ *
  * Storage categories
  * ------------------------------------------------------------------ */
 
@@ -131,6 +165,8 @@ export interface ScanProgress {
   truncated: boolean;
 }
 
+export type CloudStatus = 'online-only' | 'locally-available' | 'pinned' | 'none';
+
 export interface TreeNode {
   /** Path-derived stable id (`path` hashed). Never changes between scans of the same path. */
   id: string;
@@ -153,6 +189,10 @@ export interface TreeNode {
   children: TreeNode[];
   /** True for the aggregated placeholder node created by child pruning. */
   synthetic: boolean;
+  isSymlink?: boolean;
+  isJunction?: boolean;
+  isCloudPlaceholder?: boolean;
+  cloudStatus?: CloudStatus | null;
 }
 
 export interface ScanSummary {
@@ -233,6 +273,10 @@ export interface LargeFile {
   modifiedAt: number | null;
   extension: string | null;
   category: StorageCategory;
+  isSymlink?: boolean;
+  isJunction?: boolean;
+  isCloudPlaceholder?: boolean;
+  cloudStatus?: CloudStatus | null;
 }
 
 export interface LargeFilePage {
@@ -323,6 +367,9 @@ export interface FileDetails {
   extension: string | null;
   category: StorageCategory;
   isSymlink: boolean;
+  isJunction?: boolean;
+  isCloudPlaceholder?: boolean;
+  cloudStatus?: CloudStatus | null;
   isReadOnly: boolean;
   parentPath: string | null;
 }
@@ -384,6 +431,61 @@ export interface DeleteFailure {
 export interface DeleteOutcome {
   deleted: DeletedItem[];
   failed: DeleteFailure[];
+}
+
+/* ------------------------------------------------------------------ *
+ * User storage attribution & CSV Export
+ * ------------------------------------------------------------------ */
+
+export interface UserStorageProfile {
+  username: string;
+  userPath: string;
+  totalBytes: number;
+  diskSizeBytes: number | null;
+  fileCount: number;
+  folderCount: number;
+  categories: Partial<Record<StorageCategory, number>>;
+  topFolders: Array<{ name: string; path: string; sizeBytes: number }>;
+}
+
+export interface UserStorageReport {
+  driveId: string;
+  users: UserStorageProfile[];
+  totalAttributedBytes: number;
+}
+
+export type CsvExportType = 'all-files' | 'large-files' | 'user-attribution' | 'duplicates';
+
+export interface CsvExportRequest {
+  scanId: string;
+  exportType: CsvExportType;
+}
+
+/* ------------------------------------------------------------------ *
+ * Storage growth comparisons & snapshots
+ * ------------------------------------------------------------------ */
+
+export interface FolderGrowthDiff {
+  path: string;
+  name: string;
+  baselineBytes: number;
+  currentBytes: number;
+  deltaBytes: number;
+}
+
+export interface ScanGrowthComparison {
+  baselineScanId: string;
+  currentScanId: string;
+  baselineStartedAt: number;
+  currentStartedAt: number;
+  baselineRoot: string;
+  currentRoot: string;
+  bytesDelta: number;
+  filesDelta: number;
+  foldersDelta: number;
+  categoryDeltas: Partial<Record<StorageCategory, number>>;
+  growingFolders: FolderGrowthDiff[];
+  reclaimedFolders: FolderGrowthDiff[];
 }
 
 /* ------------------------------------------------------------------ *

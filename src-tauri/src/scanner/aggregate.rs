@@ -340,6 +340,14 @@ pub struct TreeNode {
     pub access_denied: bool,
     pub children: Vec<TreeNode>,
     pub synthetic: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_symlink: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_junction: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_cloud_placeholder: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_status: Option<String>,
 }
 
 /// Result of pruning, including what was dropped.
@@ -414,6 +422,8 @@ fn build_node(
     let directory = &index.directories[position];
     let aggregate = &index.aggregates[position];
     let path = &directory.path;
+    let is_symlink = directory.is_symlink;
+    let is_junction = directory.is_junction;
 
     let mut node = TreeNode {
         id: stable_path_id(path),
@@ -431,6 +441,10 @@ fn build_node(
         access_denied: aggregate.access_denied,
         children: Vec::new(),
         synthetic: false,
+        is_symlink: if is_symlink { Some(true) } else { None },
+        is_junction: if is_junction { Some(true) } else { None },
+        is_cloud_placeholder: None,
+        cloud_status: None,
     };
 
     if depth >= max_depth {
@@ -493,6 +507,10 @@ fn build_node(
         access_denied: false,
         children: Vec::new(),
         synthetic: true,
+        is_symlink: None,
+        is_junction: None,
+        is_cloud_placeholder: None,
+        cloud_status: None,
     };
 
     node.children = candidates;
@@ -507,6 +525,23 @@ fn file_node(file: &FileRecord) -> TreeNode {
         path: path.to_string_lossy().to_string(),
         name: file.name.clone(),
         kind: "file".to_string(),
+        size_bytes: file.size,
+        disk_size_bytes: file.disk_size,
+        file_count: 0,
+        folder_count: 0,
+        modified_at: file.modified_at,
+        created_at: None,
+        extension: file.extension.clone(),
+        category: classify(path, false),
+        access_denied: false,
+        children: Vec::new(),
+        synthetic: false,
+        is_symlink: if file.is_symlink { Some(true) } else { None },
+        is_junction: if file.is_junction { Some(true) } else { None },
+        is_cloud_placeholder: if file.is_cloud_placeholder { Some(true) } else { None },
+        cloud_status: file.cloud_status.clone(),
+    }
+}
         size_bytes: file.size,
         disk_size_bytes: file.disk_size,
         file_count: 0,

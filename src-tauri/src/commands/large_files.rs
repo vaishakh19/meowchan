@@ -51,6 +51,10 @@ pub struct LargeFile {
     pub modified_at: Option<i64>,
     pub extension: Option<String>,
     pub category: String,
+    pub is_symlink: bool,
+    pub is_junction: bool,
+    pub is_cloud_placeholder: bool,
+    pub cloud_status: Option<String>,
 }
 
 /// Mirrors `LargeFilePage`.
@@ -115,6 +119,10 @@ pub fn list_large_files(query: LargeFileQuery, state: State<'_, AppState>) -> Ap
                 modified_at: file.modified_at,
                 extension: file.extension.clone(),
                 category: classify(&path, false),
+                is_symlink: file.is_symlink,
+                is_junction: file.is_junction,
+                is_cloud_placeholder: file.is_cloud_placeholder,
+                cloud_status: file.cloud_status.clone(),
             }
         })
         .collect();

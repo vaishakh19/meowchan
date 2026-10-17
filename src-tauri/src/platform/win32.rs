@@ -70,6 +70,15 @@ extern "system" {
         riid: *const Guid,
         ppv: *mut *mut c_void,
     ) -> i32;
+    fn SHQueryRecycleBinW(pszRootPath: *const u16, pSHQueryRBInfo: *mut SHQUERYRBINFO) -> i32;
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct SHQUERYRBINFO {
+    pub cbSize: u32,
+    pub i64Size: i64,
+    pub i64NumItems: i64,
 }
 
 /// A COM GUID, laid out exactly as the ABI expects.
@@ -541,4 +550,280 @@ unsafe fn recycle_bin_delete_com(path: &Path) -> Result<(), String> {
 unsafe fn release(interface: *mut c_void) -> u32 {
     let vtable = *(interface as *const *const IUnknownVTable);
     ((*vtable).release)(interface)
+}
+
+/* ------------------------ storage breakdown ------------------------ */
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageBreakdownItem {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub size_bytes: Option<u64>,
+    pub item_count: Option<u64>,
+    pub status: String,
+    pub path: Option<String>,
+    pub description: String,
+    pub actionable_explanation: String,
+    pub is_system_protected: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageBreakdownReport {
+    pub drive_id: String,
+    pub drive_path: String,
+    pub measured_at: i64,
+    pub total_drive_bytes: u64,
+    pub free_drive_bytes: u64,
+    pub items: Vec<StorageBreakdownItem>,
+    pub notes: Vec<String>,
+}
+
+pub fn query_recycle_bin(drive_root: Option<&str>) -> Result<(u64, u64), String> {
+    let mut info = SHQUERYRBINFO {
+        cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32,
+        i64Size: 0,
+        i64NumItems: 0,
+    };
+    let wide_path = drive_root.map(|r| wide(Path::new(r)));
+    let path_ptr = match &wide_path {
+        Some(w) => w.as_ptr(),
+        None => std::ptr::null(),
+    };
+    let res = unsafe { SHQueryRecycleBinW(path_ptr, &mut info) };
+    if res == 0 {
+        Ok((info.i64Size.max(0) as u64, info.i64NumItems.max(0) as u64))
+    } else {
+        Err(format!("SHQueryRecycleBinW failed with code {res}"))
+    }
+}
+
+pub fn inspect_storage_breakdown(drive_root_str: &str) -> StorageBreakdownReport {
+    let drive_path = Path::new(drive_root_str);
+    let vol = volume_info(drive_root_str);
+    let mut items = Vec::new();
+    let mut notes = Vec::new();
+
+    // 1. Recycle Bin
+    match query_recycle_bin(Some(drive_root_str)) {
+        Ok((size, count)) => {
+            items.push(StorageBreakdownItem {
+                id: "recycle-bin".to_string(),
+                name: "Recycle Bin".to_string(),
+                category: "other".to_string(),
+                size_bytes: Some(size),
+                item_count: Some(count),
+                status: "measured".to_string(),
+                path: Some(format!("{}\\$Recycle.Bin", drive_root_str.trim_end_matches('\\'))),
+                description: "User files and folders moved to the Windows Recycle Bin.".to_string(),
+                actionable_explanation: if size > 0 {
+                    format!("Contains {} deleted item(s) using space. Can be emptied from the Desktop Recycle Bin or Windows Storage Settings.", count)
+                } else {
+                    "Recycle Bin is currently empty on this volume.".to_string()
+                },
+                is_system_protected: false,
+            });
+        }
+        Err(e) => {
+            items.push(StorageBreakdownItem {
+                id: "recycle-bin".to_string(),
+                name: "Recycle Bin".to_string(),
+                category: "other".to_string(),
+                size_bytes: None,
+                item_count: None,
+                status: "inaccessible".to_string(),
+                path: Some(format!("{}\\$Recycle.Bin", drive_root_str.trim_end_matches('\\'))),
+                description: "Windows Recycle Bin storage on this volume.".to_string(),
+                actionable_explanation: format!("Could not query Recycle Bin API: {e}"),
+                is_system_protected: false,
+            });
+        }
+    }
+
+    // 2. System Restore & Volume Shadow Copies (VSS)
+    let svi_path = drive_path.join("System Volume Information");
+    let svi_unc = crate::filesystem::long_path::to_unc_long_path(&svi_path);
+    let svi_meta = std::fs::symlink_metadata(&svi_unc);
+    match svi_meta {
+        Ok(_) => {
+            items.push(StorageBreakdownItem {
+                id: "system-restore-vss".to_string(),
+                name: "System Restore & Shadow Copies".to_string(),
+                category: "system".to_string(),
+                size_bytes: None,
+                item_count: None,
+                status: "inaccessible".to_string(),
+                path: Some(svi_path.to_string_lossy().to_string()),
+                description: "System Restore points, Volume Shadow Copies (VSS), and system catalog databases.".to_string(),
+                actionable_explanation: "Windows restricts access to the SYSTEM account. Shadow copy allocation can be viewed and configured via System Properties > System Protection or elevated 'vssadmin list shadowstorage'.".to_string(),
+                is_system_protected: true,
+            });
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            items.push(StorageBreakdownItem {
+                id: "system-restore-vss".to_string(),
+                name: "System Restore & Shadow Copies".to_string(),
+                category: "system".to_string(),
+                size_bytes: None,
+                item_count: None,
+                status: "inaccessible".to_string(),
+                path: Some(svi_path.to_string_lossy().to_string()),
+                description: "System Restore points, Volume Shadow Copies (VSS), and system catalog databases.".to_string(),
+                actionable_explanation: "Access denied by Windows security permissions (requires elevated Administrator/SYSTEM). Managed in Windows System Protection.".to_string(),
+                is_system_protected: true,
+            });
+        }
+        Err(_) => {
+            items.push(StorageBreakdownItem {
+                id: "system-restore-vss".to_string(),
+                name: "System Restore & Shadow Copies".to_string(),
+                category: "system".to_string(),
+                size_bytes: None,
+                item_count: None,
+                status: "not-configured".to_string(),
+                path: Some(svi_path.to_string_lossy().to_string()),
+                description: "System Volume Information directory is not present or configured on this volume.".to_string(),
+                actionable_explanation: "System Restore is not enabled on this volume.".to_string(),
+                is_system_protected: true,
+            });
+        }
+    }
+
+    // 3. Hibernation file (hiberfil.sys)
+    let hiber_path = drive_path.join("hiberfil.sys");
+    let hiber_unc = crate::filesystem::long_path::to_unc_long_path(&hiber_path);
+    match std::fs::symlink_metadata(&hiber_unc) {
+        Ok(m) => {
+            let actual = disk_size(&hiber_unc).unwrap_or(m.len());
+            items.push(StorageBreakdownItem {
+                id: "hibernation-file".to_string(),
+                name: "Hibernation File (hiberfil.sys)".to_string(),
+                category: "system".to_string(),
+                size_bytes: Some(actual),
+                item_count: Some(1),
+                status: "measured".to_string(),
+                path: Some(hiber_path.to_string_lossy().to_string()),
+                description: "Reserved memory dump file used by Windows Fast Startup and Hibernation.".to_string(),
+                actionable_explanation: "Protected system file. Size and state can be managed via elevated command prompt using 'powercfg.exe /hibernate on|off' or 'powercfg /h /type reduced'.".to_string(),
+                is_system_protected: true,
+            });
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            items.push(StorageBreakdownItem {
+                id: "hibernation-file".to_string(),
+                name: "Hibernation File (hiberfil.sys)".to_string(),
+                category: "system".to_string(),
+                size_bytes: Some(0),
+                item_count: Some(0),
+                status: "not-configured".to_string(),
+                path: Some(hiber_path.to_string_lossy().to_string()),
+                description: "Windows Hibernation is disabled or not allocated on this volume.".to_string(),
+                actionable_explanation: "No hibernation storage is currently allocated on this drive.".to_string(),
+                is_system_protected: true,
+            });
+        }
+        Err(e) => {
+            items.push(StorageBreakdownItem {
+                id: "hibernation-file".to_string(),
+                name: "Hibernation File (hiberfil.sys)".to_string(),
+                category: "system".to_string(),
+                size_bytes: None,
+                item_count: None,
+                status: "inaccessible".to_string(),
+                path: Some(hiber_path.to_string_lossy().to_string()),
+                description: "Windows Hibernation file presence could not be determined.".to_string(),
+                actionable_explanation: format!("File system check returned: {e}"),
+                is_system_protected: true,
+            });
+        }
+    }
+
+    // 4. Pagefile & Swapfile (pagefile.sys, swapfile.sys)
+    let page_path = drive_path.join("pagefile.sys");
+    let swap_path = drive_path.join("swapfile.sys");
+    let mut page_size = 0u64;
+    let mut found_page = false;
+    if let Ok(m) = std::fs::symlink_metadata(crate::filesystem::long_path::to_unc_long_path(&page_path)) {
+        page_size += disk_size(&page_path).unwrap_or(m.len());
+        found_page = true;
+    }
+    if let Ok(m) = std::fs::symlink_metadata(crate::filesystem::long_path::to_unc_long_path(&swap_path)) {
+        page_size += disk_size(&swap_path).unwrap_or(m.len());
+        found_page = true;
+    }
+
+    if found_page {
+        items.push(StorageBreakdownItem {
+            id: "virtual-memory".to_string(),
+            name: "Virtual Memory (pagefile.sys / swapfile.sys)".to_string(),
+            category: "system".to_string(),
+            size_bytes: Some(page_size),
+            item_count: Some(if page_size > 0 { 1 } else { 0 }),
+            status: "measured".to_string(),
+            path: Some(page_path.to_string_lossy().to_string()),
+            description: "Windows virtual memory paging file and modern app swap space.".to_string(),
+            actionable_explanation: "Managed automatically by Windows memory manager. Configurable in System Properties > Advanced > Performance Settings > Virtual Memory.".to_string(),
+            is_system_protected: true,
+        });
+    } else {
+        items.push(StorageBreakdownItem {
+            id: "virtual-memory".to_string(),
+            name: "Virtual Memory (pagefile.sys)".to_string(),
+            category: "system".to_string(),
+            size_bytes: Some(0),
+            item_count: Some(0),
+            status: "not-configured".to_string(),
+            path: Some(page_path.to_string_lossy().to_string()),
+            description: "No active paging file allocated on this specific drive.".to_string(),
+            actionable_explanation: "Paging file is either disabled or allocated on another drive.".to_string(),
+            is_system_protected: true,
+        });
+    }
+
+    // 5. Windows Temp / Software Distribution Cache (if on system drive)
+    if is_system_drive(drive_path) {
+        let temp_dir = drive_path.join("Windows").join("Temp");
+        let mut temp_bytes = 0u64;
+        let mut temp_files = 0u64;
+        let mut temp_accessible = false;
+        if let Ok(entries) = std::fs::read_dir(crate::filesystem::long_path::to_unc_long_path(&temp_dir)) {
+            temp_accessible = true;
+            for entry in entries.flatten() {
+                if let Ok(m) = entry.metadata() {
+                    if m.is_file() {
+                        temp_bytes += m.len();
+                        temp_files += 1;
+                    }
+                }
+            }
+        }
+        if temp_accessible {
+            items.push(StorageBreakdownItem {
+                id: "system-temp".to_string(),
+                name: "System Temporary Files (C:\\Windows\\Temp)".to_string(),
+                category: "cache".to_string(),
+                size_bytes: Some(temp_bytes),
+                item_count: Some(temp_files),
+                status: "measured".to_string(),
+                path: Some(temp_dir.to_string_lossy().to_string()),
+                description: "Temporary files created by Windows system services and installers.".to_string(),
+                actionable_explanation: "Safe to clean via Windows Disk Cleanup (cleanmgr.exe) or Windows Storage Sense.".to_string(),
+                is_system_protected: false,
+            });
+        }
+    }
+
+    notes.push("All breakdown inspections are read-only. Diskora never deletes system-protected files or alters Windows configurations.".to_string());
+
+    StorageBreakdownReport {
+        drive_id: vol.id,
+        drive_path: vol.root,
+        measured_at: crate::time::now_millis(),
+        total_drive_bytes: vol.total_bytes,
+        free_drive_bytes: vol.free_bytes,
+        items,
+        notes,
+    }
 }

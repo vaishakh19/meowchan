@@ -22,6 +22,8 @@ pub struct DriveInfo {
     pub is_disconnected: bool,
 }
 
+pub use crate::platform::{StorageBreakdownItem, StorageBreakdownReport};
+
 /// Every logical volume on this machine, including ones that are not ready.
 #[tauri::command]
 pub fn list_drives(_state: State<'_, AppState>) -> Vec<DriveInfo> {
@@ -54,6 +56,26 @@ pub fn list_drives(_state: State<'_, AppState>) -> Vec<DriveInfo> {
             }
         })
         .collect()
+}
+
+/// Gathers Windows storage breakdown for the given drive or the system drive.
+#[tauri::command]
+pub fn storage_breakdown(
+    drive_id: Option<String>,
+    _state: State<'_, AppState>,
+) -> crate::error::AppResult<StorageBreakdownReport> {
+    let drive_root = match drive_id {
+        Some(id) if !id.trim().is_empty() => {
+            let trimmed = id.trim();
+            if trimmed.ends_with('\\') || trimmed.ends_with('/') {
+                trimmed.to_string()
+            } else {
+                format!("{}\\", trimmed)
+            }
+        }
+        _ => "C:\\".to_string(),
+    };
+    Ok(platform::inspect_storage_breakdown(&drive_root))
 }
 
 #[cfg(test)]
