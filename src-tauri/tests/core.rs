@@ -83,3 +83,35 @@ fn links_and_junctions_are_not_recursively_followed_or_double_counted() {
 
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn free_tier_identity_tokens_resolve_back_to_real_paths_without_leaking_them() {
+    use diskwise_lib::disclosure::{disclose, path_ref, ref_id};
+    let root = std::env::temp_dir().join(format!("diskora-tokens-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Videos")).unwrap();
+    fs::write(root.join("Videos").join("clip.mp4"), b"video").unwrap();
+    let options = ScanOptions { root_path: root.to_string_lossy().into_owned(), ..Default::default() };
+    let counters = Arc::new(ProgressCounters::new());
+    let run = walk(&options, &counters);
+    let index = ScanIndex::from_run(&run);
+
+    // The token the webview receives for the clip resolves back to the real file inside the index.
+    let clip = index.files.iter().find(|file| file.name == "clip.mp4").expect("clip.mp4 is indexed");
+    let real = clip.path.to_string_lossy().into_owned();
+    let token = path_ref(&real);
+    let id = ref_id(&token).expect("well-formed token");
+    let resolved = index.path_for_ref(id).expect("the token resolves inside the scan");
+    assert_eq!(path_ref(&resolved.to_string_lossy()), token);
+    assert!(index.path_for_ref("0000000000000000").is_none());
+
+    // The free-tier payload carries the token and a masked display string, never the real path.
+    let mut payload = serde_json::json!({ "path": real, "name": "clip.mp4" });
+    disclose(&mut payload, false);
+    let text = payload.to_string();
+    assert!(!text.contains(&root.file_name().unwrap().to_string_lossy().to_string()), "{text}");
+    let display = payload["displayPath"].as_str().expect("masked display string");
+    assert!(display.ends_with("...\\Videos\\clip.mp4") || display.ends_with("\\Videos\\clip.mp4"), "{display}");
+    assert!(!display.contains("diskora-tokens"), "{display}");
+    fs::remove_dir_all(root).unwrap();
+}

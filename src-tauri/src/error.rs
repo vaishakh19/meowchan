@@ -69,7 +69,14 @@ impl AppError {
 
 impl Serialize for AppError {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_string())
+        // Without a valid Pro licence, messages must not carry real paths (see `disclosure`).
+        let message = self.to_string();
+        let message = if crate::disclosure::full_paths_allowed() {
+            message
+        } else {
+            crate::disclosure::redact_text(&message)
+        };
+        serializer.serialize_str(&message)
     }
 }
 

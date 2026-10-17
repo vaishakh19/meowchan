@@ -78,7 +78,12 @@ pub async fn delete_items(
     // unlicensed case — a Locked decision must never reach the shell call.
     licensing::require_pro(&state).await?;
 
-    let mut paths = request.paths;
+    // Identity tokens from the UI resolve to real paths here, scoped to the requested scan.
+    let mut paths = request
+        .paths
+        .iter()
+        .map(|path| crate::disclosure::resolve_path(&state, Some(&request.scan_id), path))
+        .collect::<AppResult<Vec<String>>>()?;
     paths.sort();
     paths.dedup();
     if paths.is_empty() {

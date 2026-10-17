@@ -2,6 +2,7 @@
 //! capabilities (guarded Recycle Bin deletion and full-path display) are gated
 //! by Dodo Payments licence verification in `licensing` and `commands::pro`.
 pub mod commands;
+pub mod disclosure;
 pub mod duplicates;
 pub mod error;
 pub mod filesystem;
@@ -40,6 +41,10 @@ pub fn run() {
                     *guard = Some(settings);
                 }
             }
+
+            // Publish the cached licence state before the first webview request, so the
+            // path-disclosure rule is correct from the first scan result onwards.
+            let _ = crate::licensing::cached_status(&state);
 
             app.manage(state);
             Ok(())

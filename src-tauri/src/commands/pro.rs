@@ -80,6 +80,7 @@ mod tests {
         let status = ProStatus {
             enabled: false,
             configured: true,
+            state: "not-purchased".to_string(),
             license_key: None,
             activated_at: None,
             last_validated_at: None,

@@ -40,6 +40,14 @@ pub async fn find_duplicates(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<String> {
+    // Excluded folders may arrive as identity tokens from the file list; resolve them first.
+    let mut options = options;
+    options.exclude_paths = options
+        .exclude_paths
+        .iter()
+        .map(|path| crate::disclosure::resolve_path(&state, Some(&options.scan_id), path))
+        .collect::<AppResult<Vec<String>>>()?;
+
     let scans = state.scans()?;
     let entry = scans
         .get(&options.scan_id)
@@ -186,7 +194,12 @@ pub fn duplicates_cancel(report_id: String, state: State<'_, AppState>) -> AppRe
 
 /// Returns a finished report, or `None` when it is unknown or still running.
 #[tauri::command]
-pub fn duplicates_get(report_id: String, state: State<'_, AppState>) -> AppResult<Option<DuplicateReport>> {
+pub fn duplicates_get(report_id: String, state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let result = duplicates_get_typed(report_id, &state)?;
+    crate::disclosure::disclosed(&result)
+}
+
+fn duplicates_get_typed(report_id: String, state: &AppState) -> AppResult<Option<DuplicateReport>> {
     let registry = state
         .duplicate_reports
         .lock()
@@ -201,6 +214,8 @@ pub async fn verify_duplicates(
     path_b: String,
     state: State<'_, AppState>,
 ) -> AppResult<crate::duplicates::verify::VerifyResult> {
+    let path_a = crate::disclosure::resolve_path(&state, None, &path_a)?;
+    let path_b = crate::disclosure::resolve_path(&state, None, &path_b)?;
     if path_a == path_b {
         return Err(AppError::InvalidArgument("Choose two different files to compare.".to_string()));
     }

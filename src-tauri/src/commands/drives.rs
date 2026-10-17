@@ -63,7 +63,12 @@ pub fn list_drives(_state: State<'_, AppState>) -> Vec<DriveInfo> {
 pub fn storage_breakdown(
     drive_id: Option<String>,
     _state: State<'_, AppState>,
-) -> crate::error::AppResult<StorageBreakdownReport> {
+) -> crate::error::AppResult<serde_json::Value> {
+    let report = storage_breakdown_typed(drive_id)?;
+    crate::disclosure::disclosed(&report)
+}
+
+fn storage_breakdown_typed(drive_id: Option<String>) -> crate::error::AppResult<StorageBreakdownReport> {
     let drive_root = match drive_id {
         Some(id) if !id.trim().is_empty() => {
             let trimmed = id.trim();

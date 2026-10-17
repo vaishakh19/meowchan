@@ -109,7 +109,12 @@ fn merge_preferences(previous: Option<&str>, settings: &AppSettings) -> AppResul
 
 /// Exactly what Diskwise stores locally and what (if anything) leaves the device.
 #[tauri::command]
-pub fn privacy_report(state: State<'_, AppState>) -> AppResult<PrivacyReport> {
+pub fn privacy_report(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let result = privacy_report_typed(&state)?;
+    crate::disclosure::disclosed(&result)
+}
+
+fn privacy_report_typed(state: &AppState) -> AppResult<PrivacyReport> {
     let (data_dir, database_path) = {
         let guard = state.database()?;
         match guard.as_ref() {

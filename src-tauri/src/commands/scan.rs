@@ -141,7 +141,9 @@ pub async fn scan_start(
                     started.elapsed().as_millis() as u64,
                     None,
                 );
-                let _ = emitter_app.emit(SCAN_PROGRESS_EVENT, &payload);
+                if let Ok(value) = crate::disclosure::disclosed(&payload) {
+                    let _ = emitter_app.emit(SCAN_PROGRESS_EVENT, &value);
+                }
                 if matches!(
                     phase,
                     crate::scanner::progress::ScanPhase::Done
@@ -229,7 +231,9 @@ pub async fn scan_start(
             walk_started.elapsed().as_millis() as u64,
             expected_bytes,
         );
-        let _ = walk_app.emit(SCAN_PROGRESS_EVENT, &final_payload);
+        if let Ok(value) = crate::disclosure::disclosed(&final_payload) {
+            let _ = walk_app.emit(SCAN_PROGRESS_EVENT, &value);
+        }
         let _ = emitter.join();
     });
 
@@ -276,7 +280,12 @@ pub async fn scan_cancel(scan_id: String, state: State<'_, AppState>) -> AppResu
 
 /// Returns the full result for a finished scan, or `None` when it is unknown.
 #[tauri::command]
-pub fn scan_get(scan_id: String, state: State<'_, AppState>) -> AppResult<Option<ScanResult>> {
+pub fn scan_get(scan_id: String, state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let result = scan_get_typed(scan_id, &state)?;
+    crate::disclosure::disclosed(&result)
+}
+
+fn scan_get_typed(scan_id: String, state: &AppState) -> AppResult<Option<ScanResult>> {
     let scans = state.scans()?;
     let entry = match scans.get(&scan_id) {
         Some(entry) => entry,
@@ -287,7 +296,12 @@ pub fn scan_get(scan_id: String, state: State<'_, AppState>) -> AppResult<Option
 
 /// Every scan this session knows about, newest first.
 #[tauri::command]
-pub fn scan_list(state: State<'_, AppState>) -> AppResult<Vec<ScanSummary>> {
+pub fn scan_list(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let result = scan_list_typed(&state)?;
+    crate::disclosure::disclosed(&result)
+}
+
+fn scan_list_typed(state: &AppState) -> AppResult<Vec<ScanSummary>> {
     // Scan summaries are free and local. The full index remains in memory only for the latest scan.
     let mut summaries: Vec<ScanSummary> = {
         let scans = state.scans()?;
@@ -379,7 +393,15 @@ fn default_children_sort_direction() -> String { "desc".to_string() }
 /// Paginated children of a directory inside a scan. Each IPC response is capped at 1,000 records;
 /// the full index is never serialized into the webview.
 #[tauri::command]
-pub fn scan_children(query: ChildrenQuery, state: State<'_, AppState>) -> AppResult<ChildrenPage> {
+pub fn scan_children(query: ChildrenQuery, state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let result = scan_children_typed(query, &state)?;
+    crate::disclosure::disclosed(&result)
+}
+
+fn scan_children_typed(query: ChildrenQuery, state: &AppState) -> AppResult<ChildrenPage> {
+    // The webview sends identity tokens for items it was shown; resolve them to real paths here.
+    let mut query = query;
+    query.path = crate::disclosure::resolve_path(state, Some(&query.scan_id), &query.path)?;
     let sort = match query.sort.as_str() {
         "name" => EntrySort::Name,
         "size" => EntrySort::Size,
@@ -613,7 +635,12 @@ pub struct UserStorageReport {
 }
 
 #[tauri::command]
-pub fn user_storage_report(scan_id: String, state: State<'_, AppState>) -> AppResult<UserStorageReport> {
+pub fn user_storage_report(scan_id: String, state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let result = user_storage_report_typed(scan_id, &state)?;
+    crate::disclosure::disclosed(&result)
+}
+
+fn user_storage_report_typed(scan_id: String, state: &AppState) -> AppResult<UserStorageReport> {
     let scans = state.scans()?;
     let entry = scans
         .get(&scan_id)
@@ -697,6 +724,8 @@ fn csv_escape(s: &str) -> String {
 
 #[tauri::command]
 pub fn export_scan_csv(request: CsvExportRequest, state: State<'_, AppState>) -> AppResult<String> {
+    // The export writes real paths to a file on disk, so it is a Pro feature.
+    crate::licensing::require_active_pro()?;
     let scans = state.scans()?;
     let entry = scans
         .get(&request.scan_id)
@@ -824,6 +853,15 @@ pub fn compare_scans(
     baseline_scan_id: String,
     current_scan_id: String,
     state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    let result = compare_scans_typed(baseline_scan_id, current_scan_id, &state)?;
+    crate::disclosure::disclosed(&result)
+}
+
+fn compare_scans_typed(
+    baseline_scan_id: String,
+    current_scan_id: String,
+    state: &AppState,
 ) -> AppResult<ScanGrowthComparison> {
     let scans = state.scans()?;
     let baseline_entry = scans

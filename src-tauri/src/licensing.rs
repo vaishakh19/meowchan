@@ -35,7 +35,9 @@ use crate::state::AppState;
 pub const OFFLINE_GRACE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 const NOT_CONFIGURED: &str = "This build of Diskora has no Dodo Payments configuration. The merchant must set a one-time product and a payment link before Diskora Pro can be sold; see PRO-SETUP.md.";
-const NOT_PURCHASED: &str = "Diskora Pro is not active on this device. Buy it once from the Diskora Pro page to unlock safe deletion and full paths.";
+const NOT_PURCHASED: &str = "Diskora Pro is not active on this device. Buy it once ($12.99, no subscription) to unlock Delete to Recycle Bin, Reveal in Explorer and full paths.";
+const REVOKED: &str = "This Diskora Pro licence is no longer valid. It may have been revoked, refunded, expired or used on too many devices. Check the key, or contact support.";
+const UNVERIFIED: &str = "Your Diskora Pro purchase has not been re-verified for more than 7 days. Connect to the internet and press Restore purchases.";
 
 /* ------------------------------- configuration ------------------------------- */
 
@@ -317,13 +319,16 @@ pub enum ProDecision {
     Verified(StoredEntitlement),
     /// Dodo was unreachable, but this entitlement was verified recently enough.
     OfflineGrace(StoredEntitlement),
-    /// No purchase, or the purchase is no longer valid.
+    /// No purchase is stored on this device.
     Locked,
+    /// Dodo answered that the stored key is no longer valid (revoked, refunded, expired, or over
+    /// its activation limit). The stored entitlement has been removed.
+    Revoked,
 }
 
 impl ProDecision {
     pub fn is_active(&self) -> bool {
-        !matches!(self, ProDecision::Locked)
+        matches!(self, ProDecision::Verified(_) | ProDecision::OfflineGrace(_))
     }
 
     pub fn entitlement(&self) -> Option<&StoredEntitlement> {
@@ -331,7 +336,7 @@ impl ProDecision {
             ProDecision::Verified(entitlement) | ProDecision::OfflineGrace(entitlement) => {
                 Some(entitlement)
             }
-            ProDecision::Locked => None,
+            ProDecision::Locked | ProDecision::Revoked => None,
         }
     }
 }
@@ -368,6 +373,9 @@ pub fn within_grace(entitlement: &StoredEntitlement, now_ms: i64) -> bool {
 pub struct ProStatus {
     pub enabled: bool,
     pub configured: bool,
+    /// Machine-readable state: `active`, `offline`, `not-purchased`, `invalid`, `unverified`
+    /// or `not-configured`. Drives the UI copy and badges; the message stays human-readable.
+    pub state: String,
     /// Masked key (`ABCD…WXYZ`), when an entitlement is stored.
     pub license_key: Option<String>,
     pub activated_at: Option<i64>,
@@ -378,10 +386,11 @@ pub struct ProStatus {
 }
 
 impl ProStatus {
-    fn locked(configured: bool, message: String) -> Self {
+    fn locked(configured: bool, state: &str, message: String) -> Self {
         Self {
             enabled: false,
             configured,
+            state: state.to_string(),
             license_key: None,
             activated_at: None,
             last_validated_at: None,
@@ -395,25 +404,27 @@ pub fn status_for(decision: &ProDecision) -> ProStatus {
     let configured = is_configured();
     match decision {
         ProDecision::Locked => {
-            let message = if configured {
-                NOT_PURCHASED.to_string()
+            if configured {
+                ProStatus::locked(configured, "not-purchased", NOT_PURCHASED.to_string())
             } else {
-                NOT_CONFIGURED.to_string()
-            };
-            ProStatus::locked(configured, message)
+                ProStatus::locked(configured, "not-configured", NOT_CONFIGURED.to_string())
+            }
         }
+        ProDecision::Revoked => ProStatus::locked(configured, "invalid", REVOKED.to_string()),
         ProDecision::OfflineGrace(entitlement) => ProStatus {
             enabled: true,
             configured,
+            state: "offline".to_string(),
             license_key: Some(mask_key(&entitlement.license_key)),
             activated_at: Some(entitlement.activated_at),
             last_validated_at: Some(entitlement.last_validated_at),
             offline: true,
-            message: "Diskora Pro is active. Dodo Payments was unreachable, so the last verified purchase is being trusted until the connection returns.".to_string(),
+            message: "Diskora Pro is active. Dodo Payments was unreachable, so the last verified purchase is being trusted until the connection returns. Deletion still needs a live check.".to_string(),
         },
         ProDecision::Verified(entitlement) => ProStatus {
             enabled: true,
             configured,
+            state: "active".to_string(),
             license_key: Some(mask_key(&entitlement.license_key)),
             activated_at: Some(entitlement.activated_at),
             last_validated_at: Some(entitlement.last_validated_at),
@@ -625,8 +636,15 @@ fn stored_entitlement(state: &AppState) -> AppResult<Option<StoredEntitlement>> 
 }
 
 /// The startup status: fast, honest, and never more optimistic than the last
-/// verified check plus the offline grace window.
+/// verified check plus the offline grace window. Publishes the result so the
+/// path-disclosure layer follows the same rule.
 pub fn cached_status(state: &AppState) -> AppResult<ProStatus> {
+    let status = cached_status_inner(state)?;
+    crate::disclosure::set_full_paths(status.enabled);
+    Ok(status)
+}
+
+fn cached_status_inner(state: &AppState) -> AppResult<ProStatus> {
     let stored = stored_entitlement(state)?;
     if !is_configured() {
         return Ok(status_for(&ProDecision::Locked));
@@ -635,8 +653,21 @@ pub fn cached_status(state: &AppState) -> AppResult<ProStatus> {
         clear_stored(state)?;
         return Ok(status_for(&ProDecision::Locked));
     }
-    let decision = decide(stored, None, crate::time::now_millis());
-    Ok(status_for(&decision))
+    match stored {
+        None => Ok(status_for(&ProDecision::Locked)),
+        Some(entitlement) if within_grace(&entitlement, crate::time::now_millis()) => {
+            Ok(cached_active_status(entitlement))
+        }
+        Some(_) => Ok(ProStatus::locked(is_configured(), "unverified", UNVERIFIED.to_string())),
+    }
+}
+
+/// A stored entitlement that was verified recently. It is trusted at startup without a network
+/// call; the Pro page, Restore and every deletion re-check it with Dodo Payments.
+fn cached_active_status(entitlement: StoredEntitlement) -> ProStatus {
+    let mut status = status_for(&ProDecision::Verified(entitlement));
+    status.message = "Diskora Pro is active. This is the last verified state. Restore purchases re-checks it with Dodo Payments, and every deletion is checked live.".to_string();
+    status
 }
 
 /// Revalidates with Dodo and refreshes the stored entitlement. Used by the Pro page,
@@ -649,6 +680,13 @@ pub async fn verified_status(state: &AppState) -> AppResult<ProStatus> {
 /// The decision safe deletion gates on: a fresh server check, falling back to the
 /// grace window only when Dodo Payments is unreachable.
 pub async fn verified_decision(state: &AppState) -> AppResult<ProDecision> {
+    let result = verified_decision_inner(state).await;
+    // Every verification updates the disclosure rule, including failures (fail closed).
+    crate::disclosure::set_full_paths(matches!(&result, Ok(decision) if decision.is_active()));
+    result
+}
+
+async fn verified_decision_inner(state: &AppState) -> AppResult<ProDecision> {
     let Some(entitlement) = stored_entitlement(state)? else {
         return Ok(ProDecision::Locked);
     };
@@ -672,7 +710,7 @@ pub async fn verified_decision(state: &AppState) -> AppResult<ProDecision> {
         Ok(false) => {
             // The key was revoked, refunded, expired or exhausted — stop trusting it.
             clear_stored(state)?;
-            Ok(ProDecision::Locked)
+            Ok(ProDecision::Revoked)
         }
         Err(network) => {
             if within_grace(&entitlement, crate::time::now_millis()) {
@@ -693,6 +731,18 @@ fn require_fresh_verification(decision: &ProDecision) -> AppResult<()> {
             "Deletion requires a fresh Dodo Payments verification. Reconnect and try again; offline grace does not authorize deletion.".to_string(),
         )),
         ProDecision::Locked => Err(AppError::Licence(NOT_PURCHASED.to_string())),
+        ProDecision::Revoked => Err(AppError::Licence(REVOKED.to_string())),
+    }
+}
+
+/// Gate for the non-destructive Pro features (reveal in Explorer, open, full-path export).
+/// It reads the verification state that was last published, so it never touches the network.
+/// Deletion uses `require_pro` instead, which always re-verifies.
+pub fn require_active_pro() -> AppResult<()> {
+    if crate::disclosure::full_paths_allowed() {
+        Ok(())
+    } else {
+        Err(AppError::Licence(NOT_PURCHASED.to_string()))
     }
 }
 
@@ -735,6 +785,7 @@ pub async fn activate(state: &AppState, license_key: &str) -> AppResult<ProStatu
         last_validated_at: now,
     };
     save_stored(state, &entitlement)?;
+    crate::disclosure::set_full_paths(true);
     Ok(status_for(&ProDecision::Verified(entitlement)))
 }
 
@@ -923,5 +974,77 @@ mod tests {
         let name = device_name();
         assert!(!name.is_empty());
         assert!(name.len() <= 64);
+    }
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+    use crate::disclosure::{full_paths_allowed, set_full_paths};
+
+    const NOW: i64 = 10_000_000_000;
+
+    fn stored(last_validated_at: i64) -> StoredEntitlement {
+        StoredEntitlement {
+            license_key: "ABCD-1234-EFGH-5678".to_string(),
+            instance_id: Some("lki_123".to_string()),
+            product_id: "pdt_test".to_string(),
+            device_name: "Diskora on TEST-PC".to_string(),
+            activated_at: 1_000,
+            last_validated_at,
+        }
+    }
+
+    #[test]
+    fn a_revoked_licence_is_reported_as_invalid_and_never_active() {
+        let decision = ProDecision::Revoked;
+        assert!(!decision.is_active());
+        assert!(decision.entitlement().is_none());
+        let status = status_for(&decision);
+        assert!(!status.enabled);
+        assert_eq!(status.state, "invalid");
+        assert!(status.message.contains("no longer valid"));
+        assert!(require_fresh_verification(&decision).is_err());
+    }
+
+    #[test]
+    fn invalid_or_expired_licences_fall_back_to_free() {
+        // A key Dodo rejects never unlocks, even inside the grace window.
+        assert!(!decide(Some(stored(NOW)), Some(false), NOW).is_active());
+        // A stored key that has not been re-verified within the grace window is not active.
+        let expired = decide(Some(stored(NOW - OFFLINE_GRACE_MS - 1)), None, NOW);
+        assert!(!expired.is_active());
+        assert_eq!(status_for(&expired).state, "not-purchased");
+    }
+
+    #[test]
+    fn status_states_are_distinct_and_machine_readable() {
+        assert_eq!(status_for(&ProDecision::Verified(stored(NOW))).state, "active");
+        assert_eq!(status_for(&ProDecision::OfflineGrace(stored(NOW))).state, "offline");
+        assert_eq!(status_for(&ProDecision::Locked).state, if is_configured() { "not-purchased" } else { "not-configured" });
+    }
+
+    /// One test owns the process-wide access flag, so parallel tests cannot race on it.
+    #[test]
+    fn the_free_and_pro_gates_follow_the_verified_state() {
+        // Free: no licence, no reveal, no delete.
+        set_full_paths(false);
+        assert!(!full_paths_allowed());
+        assert!(require_active_pro().is_err(), "reveal/export must be refused for free");
+        assert!(require_fresh_verification(&ProDecision::Locked).is_err(), "delete must be refused");
+        assert!(require_fresh_verification(&ProDecision::Revoked).is_err());
+        assert!(require_fresh_verification(&ProDecision::OfflineGrace(stored(NOW))).is_err());
+
+        // Pro: a fresh verification unlocks both reveal/export and delete.
+        let verified = ProDecision::Verified(stored(NOW));
+        set_full_paths(verified.is_active());
+        assert!(full_paths_allowed());
+        assert!(require_active_pro().is_ok());
+        assert!(require_fresh_verification(&verified).is_ok());
+
+        // Back to free after the licence is revoked.
+        set_full_paths(ProDecision::Revoked.is_active());
+        assert!(require_active_pro().is_err());
+        set_full_paths(false);
     }
 }

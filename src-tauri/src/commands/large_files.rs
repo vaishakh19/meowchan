@@ -69,7 +69,12 @@ pub struct LargeFilePage {
 }
 
 #[tauri::command]
-pub fn list_large_files(query: LargeFileQuery, state: State<'_, AppState>) -> AppResult<LargeFilePage> {
+pub fn list_large_files(query: LargeFileQuery, state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let result = list_large_files_typed(query, &state)?;
+    crate::disclosure::disclosed(&result)
+}
+
+fn list_large_files_typed(query: LargeFileQuery, state: &AppState) -> AppResult<LargeFilePage> {
     let scans = state.scans()?;
     let entry = scans
         .get(&query.scan_id)

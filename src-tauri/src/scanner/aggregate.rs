@@ -240,6 +240,29 @@ impl ScanIndex {
         self.aggregates.first().map(|aggregate| aggregate.folder_count).unwrap_or(0)
     }
 
+    /// The real path behind an identity token's id (see `disclosure::path_for_ref`).
+    ///
+    /// A linear scan over the live (not removed) entries. It runs only when the user navigates
+    /// with a token, never while a scan is being built, so it stays off the hot path.
+    pub fn path_for_ref(&self, id: &str) -> Option<PathBuf> {
+        let directory = self
+            .directories
+            .iter()
+            .enumerate()
+            .find(|(position, directory)| {
+                !self.removed_directories.contains(position) && stable_path_id(&directory.path) == id
+            })
+            .map(|(_, directory)| directory.path.clone());
+        if directory.is_some() {
+            return directory;
+        }
+        self.files
+            .iter()
+            .enumerate()
+            .find(|(position, file)| !self.removed_files.contains(position) && stable_path_id(&file.path) == id)
+            .map(|(_, file)| file.path.clone())
+    }
+
     pub fn position_of(&self, path: &Path) -> Option<usize> {
         let position = self.index.get(path).copied()?;
         if self.removed_directories.contains(&position) {

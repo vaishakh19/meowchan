@@ -41,7 +41,13 @@ pub struct FileDetails {
 
 /// Reads details for a single path. Folder totals come from the live scan index when available.
 #[tauri::command]
-pub fn file_details(path: String, state: State<'_, AppState>) -> AppResult<FileDetails> {
+pub fn file_details(path: String, state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let path = crate::disclosure::resolve_path(&state, None, &path)?;
+    let details = file_details_typed(path, &state)?;
+    crate::disclosure::disclosed(&details)
+}
+
+fn file_details_typed(path: String, state: &AppState) -> AppResult<FileDetails> {
     validate_path(&path)?;
     let candidate = PathBuf::from(&path);
     if let Some(parent) = candidate.parent() {
@@ -117,7 +123,7 @@ pub fn file_details(path: String, state: State<'_, AppState>) -> AppResult<FileD
 
 /// The most recent scan index that contains `path`, if any.
 fn find_index(
-    state: &State<'_, AppState>,
+    state: &AppState,
     path: &Path,
 ) -> Option<std::sync::Arc<std::sync::RwLock<crate::scanner::aggregate::ScanIndex>>> {
     let scans = state.scans().ok()?;
@@ -139,7 +145,9 @@ fn find_index(
 
 /// Reveals a path in File Explorer with the item selected.
 #[tauri::command]
-pub fn reveal_in_explorer(path: String) -> AppResult<()> {
+pub fn reveal_in_explorer(path: String, state: State<'_, AppState>) -> AppResult<()> {
+    crate::licensing::require_active_pro()?;
+    let path = crate::disclosure::resolve_path(&state, None, &path)?;
     validate_path(&path)?;
     let candidate = PathBuf::from(&path);
     ensure_exists(&candidate)?;
@@ -148,7 +156,9 @@ pub fn reveal_in_explorer(path: String) -> AppResult<()> {
 
 /// Opens a path with its default application.
 #[tauri::command]
-pub fn open_path(path: String) -> AppResult<()> {
+pub fn open_path(path: String, state: State<'_, AppState>) -> AppResult<()> {
+    crate::licensing::require_active_pro()?;
+    let path = crate::disclosure::resolve_path(&state, None, &path)?;
     validate_path(&path)?;
     let candidate = PathBuf::from(&path);
     ensure_exists(&candidate)?;
