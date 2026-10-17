@@ -2,7 +2,7 @@
 
 ## Windows CI result
 
-The Windows workflow passed on a `windows-2022` runner for source commit `a5ca309` and again after the checksum fix. The latest push run, [39032840518](https://github.com/vaishakh19/meowchan/actions/runs/39032840518), tested commit `16d9e46` and delivered regenerated binaries as `f589920`; checksum validation also passed in [run 39032365848](https://github.com/vaishakh19/meowchan/actions/runs/39032365848). The PR workflow passed in [run 39032368745](https://github.com/vaishakh19/meowchan/actions/runs/39032368745).
+The Windows workflow passed on a `windows-2022` runner for source commit `a5ca309` and again after the checksum fix. Push run [39033389107](https://github.com/vaishakh19/meowchan/actions/runs/39033389107) tested commit `b01ada9`, delivered the release binaries to the session branch, and validated the checksum manifest. Earlier checksum-validation run [39032365848](https://github.com/vaishakh19/meowchan/actions/runs/39032365848) and matching PR run [39032368745](https://github.com/vaishakh19/meowchan/actions/runs/39032368745) passed as well.
 
 Passed steps included:
 
