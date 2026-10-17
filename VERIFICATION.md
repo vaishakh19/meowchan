@@ -1,27 +1,36 @@
 # Verification — 17 October 2026
 
-## Status
+## Windows CI result
 
-The frontend checks and production web build listed below passed in the authoring sandbox. **Rust compilation/tests and every Windows-specific check remain unverified for this branch.** The `release/` binaries were inherited from the base revision and are not evidence that the current source builds; do not distribute them as a build of these changes.
+The Windows workflow passed on a `windows-2022` runner for source commit `a5ca309`; the CI job then delivered its generated binaries to the session branch as commit `4cb8e81`. See [run 39031447966](https://github.com/vaishakh19/meowchan/actions/runs/39031447966).
 
-## Checks completed locally
+Passed steps included:
+
+- Native Rust tests targeting `x86_64-pc-windows-msvc`.
+- `npm ci`, `npm run typecheck`, `npm run lint` and `npm test` (**14 files, 129 tests**).
+- `npm run app:build`, which produced `release/Diskora.exe` and the current-user NSIS installer.
+- PE runtime-import inspection.
+- Smoke test of the actual WebView2 application with real on-disk files.
+- Installer install/run/uninstall checks on the CI runner.
+
+The generated files in `release/` are **7,279,104 bytes** (`Diskora.exe`) and **2,761,707 bytes** (`Diskora-setup.exe`). `sha256sum -c release/SHA256SUMS.txt` passes locally for the current files. The initial CI checksum writer joined both entries onto one line; that was corrected in the follow-up workflow change, which also validates the manifest has exactly one correct line per binary. That follow-up check is pending its next CI run.
+
+The first CI attempt caught an ownership error in the new duplicate-report test; it was fixed in `a5ca309`. The passing run above is the subsequent run.
+
+## Checks completed in the authoring sandbox
 
 - `npm ci` — installed 316 packages; audit reported 0 vulnerabilities. npm emitted one deprecation notice for `whatwg-encoding`.
 - `npm run typecheck` — passed.
-- `npm test` — passed: **14 files, 129 tests**. Coverage includes UI transport wiring, the browser-only desktop-runtime notice, duplicate byte-verification action, list paging/sorting and tree-pruning logic. Tests that mock IPC are not real filesystem or native integration tests.
+- `npm test` — passed: **14 files, 129 tests**. UI tests that mock IPC are not real filesystem or native integration tests.
 - `npm run lint` — passed with **0 errors and 0 warnings**.
 - `npm run build` — passed; Vite produced the production frontend. Vite prints a non-fatal `INEFFECTIVE_DYNAMIC_IMPORT` warning because the transport module is already statically imported elsewhere.
 - `git diff --check` — passed.
 
-## Not run / not verified
+## Still not verified
 
-- **Rust:** `cargo`, `rustc` and `rustfmt` are not installed in this environment. No `cargo test`, Rust compile, formatting check or Clippy run was possible. All native changes—including scanner path/reparse checks, tree aggregation, duplicate hashing/cancellation/report filtering, SQLite migration, DPAPI and deletion guards—must be treated as uncompiled here.
-- **Windows:** `npm run app:build` and `npm run smoke` are Windows-only and were not run. No current-branch raw executable, NSIS installer or refreshed `SHA256SUMS.txt` was produced. WebView2 behavior, current-user install/uninstall, PE imports, real folder scans, junction handling and Recycle Bin behavior have not been verified on Windows 10/11.
-- **Dodo Payments:** no real or test purchase, activation, restore or online/offline validation was exercised. The licensing code and merchant setup remain unverified against Dodo endpoints.
-- No manual accessibility, DPI/scaling, large-volume performance or SmartScreen/signing validation was performed.
+- The CI host is Windows Server 2022, not a clean Windows 10/11 desktop. No manual Win10/11 compatibility, accessibility, DPI/scaling, offline WebView2 or SmartScreen/signing validation was performed.
+- No real/test Dodo Payments purchase, activation, restore or online/offline validation was exercised.
+- The CI smoke test does not perform a real Pro deletion. Recycle Bin placement/recovery and the deletion confirmation/safety path still need a manual Windows test.
+- The authoring sandbox does not have `cargo`, `rustc` or `rustfmt`; native verification came from the Windows CI run, not a local Rust build.
 
-The Windows workflow in `.github/workflows/ci.yml` is configured to run native tests, package the installer/raw executable, inspect runtime imports, smoke-test the actual desktop UI, and test install/uninstall. A configured workflow is not a passed check; consult the branch’s GitHub Actions run before treating any of those steps as verified.
-
-## Release follow-up
-
-Before release, require a successful Windows CI run for this exact source revision, then manually test on a Windows 10/11 machine: scan a real folder and drive, check partial/error/cancellation behavior, detect and byte-verify duplicate files, confirm deletion guards and Recycle Bin recovery, and exercise a Dodo test purchase/restore. Review the generated checksums and installer, and decide whether to sign the binaries. See `README.md` and `PRO-SETUP.md` for build and merchant instructions.
+Before release, manually test on Windows 10/11: scan real folders/drives, exercise cancellation and partial/error cases, detect and byte-verify duplicates, confirm deletion guards and Recycle Bin recovery, and test a Dodo test purchase/restore. Review the generated checksums and installer, and decide whether to sign the binaries. See `README.md` and `PRO-SETUP.md` for build and merchant instructions.

@@ -13,12 +13,14 @@ setup and purchase testing.
 
 ## Current build status
 
-This branch contains source changes that have not yet been rebuilt or smoke-tested
-on Windows. The checked-in `release/` files were inherited from the base revision;
-they are not evidence that this branch's source builds. Do not distribute them as
-a build of this revision until Windows CI has rebuilt the installer and refreshed
-`release/SHA256SUMS.txt`. See [VERIFICATION.md](VERIFICATION.md) for exact checks
-and remaining platform-specific validation.
+The current source passed the Windows CI workflow on a Windows Server 2022 runner
+(run [39031447966](https://github.com/vaishakh19/meowchan/actions/runs/39031447966)).
+CI rebuilt the raw executable and current-user NSIS installer, smoke-tested the real
+WebView2 app with real files, and installed/uninstalled the package. The generated
+binaries are now in `release/`; their SHA-256 manifest is checked locally and the
+CI workflow validates its two-line format on subsequent builds. This does not
+replace a manual Windows 10/11 Recycle Bin or Dodo purchase test. See
+[VERIFICATION.md](VERIFICATION.md) for exact checks and remaining limits.
 
 ## Build and run on Windows x64
 
