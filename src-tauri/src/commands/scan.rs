@@ -30,7 +30,9 @@ pub async fn scan_start(
     // Scanning is free at every tier and is never gated. The call is still made so that the
     // permission catalogue is exercised on this path and the audit trail shows it was checked.
 
-    let root = options.root_path.trim().to_string();
+    // A rescan from the history list sends the identity token the webview was shown; resolve it.
+    let root = crate::disclosure::resolve_path(&state, None, options.root_path.trim())?;
+    let root = root.trim().to_string();
     if root.is_empty() {
         return Err(AppError::InvalidArgument("No scan root was provided.".to_string()));
     }

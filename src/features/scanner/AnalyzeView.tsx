@@ -6,6 +6,7 @@
  * guessing what the app is doing.
  */
 
+import type { TreeNode } from '@/types/contracts';
 import { useMemo, useState } from 'react';
 import {
   ChevronRight,
@@ -42,7 +43,8 @@ import {
 import { formatBytes, formatCount, formatDateTime, formatDuration, formatPercent } from '@/lib/format';
 import { categoryBreakdown } from '@/features/visualization/layout';
 import { categoryColor, categoryLabel } from '@/lib/categories';
-import { breadcrumbs, isWithin } from '@/lib/path';
+import { breadcrumbs, isWithin, shownPath } from '@/lib/path';
+import { ancestorChain } from '@/features/visualization/layout';
 import type { ViewMode } from '@/app/state';
 
 export function AnalyzeView(): React.JSX.Element {
@@ -62,7 +64,15 @@ export function AnalyzeView(): React.JSX.Element {
       ? viz.focusPath ?? result.rootPath
       : focusNode?.path ?? result.rootPath
     : null;
-  const crumbs = useMemo(() => (activePath ? breadcrumbs(activePath) : []), [activePath]);
+  const proEnabled = state.pro?.enabled === true;
+  const crumbs = useMemo(() => {
+    if (!activePath || !result) return [];
+    // Real paths (Pro) keep the full drive trail. Free-tier paths are opaque tokens, so the trail
+    // is read from the tree instead.
+    if (proEnabled) return breadcrumbs(activePath);
+    return ancestorChain(result.tree, activePath).map((node) => ({ label: node.name, path: node.path }));
+  }, [activePath, result, proEnabled]);
+  const activeDisplay = focusNode ? shownPath(focusNode) : (activePath ?? '');
 
   const handleExportCsv = async () => {
     if (!result) return;
@@ -109,8 +119,8 @@ export function AnalyzeView(): React.JSX.Element {
                 <Stat label="Analyzed" value={formatBytes(scan.progress.bytesAnalyzed)} />
                 <Stat label="Elapsed" value={formatDuration(scan.progress.elapsedMs)} />
               </dl>
-              <p className="mt-2 truncate font-mono text-[10px] text-ink-faint" title={scan.progress.currentPath}>
-                {scan.progress.currentPath}
+              <p className="mt-2 truncate font-mono text-[10px] text-ink-faint" title={scan.progress.currentPathDisplay ?? scan.progress.currentPath}>
+                {scan.progress.currentPathDisplay ?? scan.progress.currentPath}
               </p>
             </div>
           ) : null}
@@ -160,7 +170,7 @@ export function AnalyzeView(): React.JSX.Element {
           <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-0.5 text-[12px]">
             {crumbs.map((crumb, index) => {
               const last = index === crumbs.length - 1;
-              const isScannedPath = isWithin(crumb.path, result.rootPath);
+              const isScannedPath = proEnabled ? isWithin(crumb.path, result.rootPath) : true;
               const disabled = last || !isScannedPath;
               return (
                 <span key={crumb.path} className="flex items-center gap-0.5">
@@ -181,8 +191,8 @@ export function AnalyzeView(): React.JSX.Element {
               );
             })}
           </nav>
-          <p className="mt-0.5 truncate font-mono text-[10px] text-ink-faint" title={activePath ?? focusNode.path}>
-            {activePath ?? focusNode.path}
+          <p className="mt-0.5 truncate font-mono text-[10px] text-ink-faint" title={activeDisplay}>
+            {activeDisplay}
           </p>
         </div>
 
@@ -306,8 +316,8 @@ export function AnalyzeView(): React.JSX.Element {
             onSelect={actions.selectNode}
             onNavigate={actions.focusPath}
             onNavigateUp={() => {
-              const parent = focusNode.path.replace(/\\[^\\]+$/, '');
-              actions.focusPath(parent && parent.length >= 3 ? parent : result.rootPath);
+              const chain = ancestorChain(result.tree, focusNode.path);
+              actions.focusPath(chain.length >= 2 ? chain[chain.length - 2].path : result.rootPath);
             }}
             canNavigateUp={viz.focusPath !== result.rootPath}
             onContextMenu={openMenu}
@@ -329,6 +339,7 @@ export function AnalyzeView(): React.JSX.Element {
             scanId={result.scanId}
             rootPath={viz.focusPath ?? result.rootPath}
             scanRootPath={result.rootPath}
+            upPath={parentIdentity(result.tree, viz.focusPath ?? result.rootPath)}
             sort={viz.sort}
             sortDir={viz.sortDir}
             search={viz.search}
@@ -390,7 +401,7 @@ function ScanHeader(): React.JSX.Element {
           {state.scan.scanning ? 'Scanning…' : 'Disk analysis'}
         </h1>
         <p className="mt-0.5 truncate text-[10px] text-ink-faint">
-          {state.scan.progress?.currentPath ?? 'Preparing'}
+          {state.scan.progress?.currentPathDisplay ?? state.scan.progress?.currentPath ?? 'Preparing'}
         </p>
       </div>
       {state.scan.scanning ? (
@@ -411,3 +422,8 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Identity of the folder above `path`, read from the tree (works for free-tier tokens too). */
+function parentIdentity(tree: TreeNode, path: string): string | null {
+  const chain = ancestorChain(tree, path);
+  return chain.length >= 2 ? chain[chain.length - 2].path : null;
+}

@@ -139,7 +139,7 @@ export function Treemap({
             <p className="truncate text-[12px] font-semibold text-ink">{hoveredCell.name}</p>
           </div>
           <p className="dw-tnum mt-1 text-[11px] text-ink">{formatBytes(hoveredCell.sizeBytes)}</p>
-          <p className="mt-0.5 break-all font-mono text-[9px] text-ink-faint">{hoveredCell.path}</p>
+          <p className="mt-0.5 break-all font-mono text-[9px] text-ink-faint">{hoveredCell.displayPath}</p>
         </FloatingTooltip>
       ) : null}
 

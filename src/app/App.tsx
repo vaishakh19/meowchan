@@ -16,6 +16,7 @@ import { TitleBar } from './TitleBar';
 import { Sidebar } from './Sidebar';
 import { DetailsPanel } from './DetailsPanel';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
+import { UpgradeDialog } from '@/features/pro/UpgradeDialog';
 import { ToastHost } from '@/components/ui/feedback';
 import { ItemMenuProvider } from './itemMenu';
 import { AnalyzeView } from '@/features/scanner/AnalyzeView';
@@ -79,6 +80,7 @@ function Shell(): React.JSX.Element {
         <DetailsPanel />
       </div>
       <DeleteConfirmDialog />
+      <UpgradeDialog />
       <ToastHost toasts={state.toasts} onDismiss={actions.dismissToast} />
     </div>
   );

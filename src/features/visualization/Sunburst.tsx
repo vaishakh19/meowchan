@@ -365,8 +365,8 @@ function SunburstTooltip({ arc, root }: { arc: SunburstArc; root: TreeNode }): R
           <dd>level {arc.depth}</dd>
         </div>
       </dl>
-      <p className="mt-1 break-all font-mono text-[9px] leading-relaxed text-ink-faint" title={arc.path}>
-        {arc.path}
+      <p className="mt-1 break-all font-mono text-[9px] leading-relaxed text-ink-faint" title={arc.displayPath}>
+        {arc.displayPath}
       </p>
       {arc.kind === 'folder' ? (
         <p className="mt-1 flex items-center gap-1 text-[9px] text-ink-faint">

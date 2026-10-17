@@ -179,8 +179,8 @@ export function Sidebar(): React.JSX.Element {
             />
             {progress.errors > 0 ? <Row label="Skipped" value={formatCount(progress.errors)} /> : null}
           </dl>
-          <p className="mt-1.5 truncate text-[10px] text-ink-faint" title={progress.currentPath}>
-            {progress.currentPath}
+          <p className="mt-1.5 truncate text-[10px] text-ink-faint" title={progress.currentPathDisplay ?? progress.currentPath}>
+            {progress.currentPathDisplay ?? progress.currentPath}
           </p>
           <Button
             size="sm"

@@ -126,7 +126,12 @@ export interface AppState {
     error: string | null;
     selectedPaths: string[];
     excludePaths: string[];
+    /** Display text for each excluded identity (masked on the free tier). */
+    excludeLabels: Record<string, string>;
   };
+
+  /** The "Upgrade to Pro" dialog. `feature` names the locked action that opened it. */
+  upgrade: { open: boolean; feature: string | null };
 
   details: {
     path: string | null;
@@ -195,9 +200,11 @@ const initialState: AppState = {
     error: null,
     selectedPaths: [],
     excludePaths: [],
+    excludeLabels: {},
   },
   details: { path: null, data: null, loading: false, error: null },
   pro: null,
+  upgrade: { open: false, feature: null },
   deletion: { paths: null, working: false },
   settings: null,
   privacy: null,
@@ -240,13 +247,16 @@ type Action =
   | { type: 'duplicates-error'; message: string }
   | { type: 'duplicates-toggle-path'; path: string }
   | { type: 'duplicates-clear-selection' }
-  | { type: 'duplicates-exclude-add'; path: string }
+  | { type: 'duplicates-exclude-add'; path: string; label?: string }
   | { type: 'duplicates-exclude-remove'; path: string }
   | { type: 'details-path'; path: string | null }
   | { type: 'details-loading' }
   | { type: 'details-data'; data: FileDetails }
   | { type: 'details-error'; message: string }
   | { type: 'pro-status'; status: ProStatus }
+  | { type: 'upgrade-open'; feature: string | null }
+  | { type: 'upgrade-close' }
+  | { type: 'access-changed'; rootPath: string | null }
   | { type: 'deletion-request'; paths: string[] }
   | { type: 'deletion-working'; working: boolean }
   | { type: 'deletion-done' }
@@ -394,6 +404,7 @@ function reducer(state: AppState, action: Action): AppState {
           excludePaths: state.duplicates.excludePaths.includes(action.path)
             ? state.duplicates.excludePaths
             : [...state.duplicates.excludePaths, action.path],
+          excludeLabels: { ...state.duplicates.excludeLabels, [action.path]: action.label ?? action.path },
         },
       };
     case 'duplicates-exclude-remove':
@@ -414,6 +425,29 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, details: { ...state.details, loading: false, error: action.message } };
     case 'pro-status':
       return { ...state, pro: action.status };
+    case 'upgrade-open':
+      return { ...state, upgrade: { open: true, feature: action.feature } };
+    case 'upgrade-close':
+      return { ...state, upgrade: { ...state.upgrade, open: false } };
+    case 'access-changed':
+      // Free and Pro use different identities and display paths, so nothing selected or focused
+      // under the old tier is still valid. Start again from the root, keeping the scan itself.
+      return {
+        ...state,
+        viz: { ...state.viz, focusPath: action.rootPath, selectedPath: null, listPath: action.rootPath },
+        details: { path: null, data: null, loading: false, error: null },
+        largeFiles: { ...state.largeFiles, page: null, loading: false, error: null },
+        duplicates: {
+          ...state.duplicates,
+          report: null,
+          progress: null,
+          loading: false,
+          cancelling: false,
+          currentReportId: null,
+          error: null,
+          selectedPaths: [],
+        },
+      };
     case 'deletion-request':
       return { ...state, deletion: { paths: action.paths, working: false } };
     case 'deletion-working':
@@ -464,7 +498,10 @@ export interface AppActions {
   verifyDuplicateFiles(pathA: string, pathB: string): Promise<DuplicateVerifyResult>;
   toggleDuplicatePath(path: string): void;
   clearDuplicateSelection(): void;
-  excludeDuplicatePath(path: string): void;
+  excludeDuplicatePath(path: string, label?: string): void;
+  /** Opens the "Upgrade to Pro" dialog; `feature` names the locked action. */
+  openUpgrade(): void;
+  closeUpgrade(): void;
   removeDuplicateExclusion(path: string): void;
   updateSettings(patch: Partial<AppSettings>): Promise<void>;
 
@@ -475,9 +512,11 @@ export interface AppActions {
   verifyPro(): Promise<void>;
   /** Opens the Dodo Payments checkout for the one-time $12.99 purchase. */
   openProCheckout(): Promise<void>;
-  activateLicense(licenseKey: string): Promise<void>;
+  activateLicense(licenseKey: string): Promise<ProStatus>;
   /** Re-validates the stored purchase — the restore-purchases flow. */
-  restorePurchases(): Promise<void>;
+  restorePurchases(): Promise<ProStatus>;
+  /** Re-checks a stored licence with Dodo Payments without showing errors. */
+  reverifyPro(): Promise<void>;
   /** Explains that a feature is Pro and offers the upgrade path. */
   promptUpgrade(feature: string): void;
 
@@ -596,6 +635,33 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       const transport = transportRef.current;
       if (!transport) throw new Error('The backend is still starting up.');
       return transport;
+    };
+
+    /**
+     * Publishes a licence state. When the tier changes, the open scan is re-fetched so every
+     * identity and display path matches the new tier, and the view resets to the root.
+     */
+    const applyPro = async (status: ProStatus): Promise<void> => {
+      if (!status) return;
+      const previous = stateRef.current.pro?.enabled;
+      dispatch({ type: 'pro-status', status });
+      if (previous === undefined || previous === null || previous === status.enabled) return;
+      const scanId = stateRef.current.scan.result?.scanId;
+      let rootPath = stateRef.current.scan.result?.rootPath ?? null;
+      if (scanId) {
+        try {
+          const refreshed = await requireTransport().scanGet(scanId);
+          if (refreshed) {
+            dispatch({ type: 'scan-refreshed', result: refreshed });
+            rootPath = refreshed.rootPath;
+          }
+        } catch {
+          // Keep the current result; the next visit to the view re-reads it.
+        }
+      }
+      dispatch({ type: 'access-changed', rootPath });
+      const largeQuery = stateRef.current.largeFiles.query;
+      if (largeQuery && scanId) void actions.runLargeFileQuery(largeQuery);
     };
 
     return {
@@ -720,7 +786,8 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
         }
         dispatch({ type: 'details-path', path });
         // Synthetic aggregate nodes have no filesystem entry to describe.
-        if (path.endsWith('[Other]')) return;
+        const tree = stateRef.current.scan.result?.tree;
+        if (path.endsWith('[Other]') || (tree && findNode(tree, path)?.synthetic)) return;
         dispatch({ type: 'details-loading' });
         try {
           dispatch({ type: 'details-data', data: await requireTransport().fileDetails(path) });
@@ -730,6 +797,10 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       },
 
       reveal: async (path) => {
+        if (!stateRef.current.pro?.enabled) {
+          actions.promptUpgrade('Reveal in File Explorer');
+          return;
+        }
         try {
           await requireTransport().revealInExplorer(path);
         } catch (error) {
@@ -738,6 +809,10 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       },
 
       open: async (path) => {
+        if (!stateRef.current.pro?.enabled) {
+          actions.promptUpgrade('Opening files');
+          return;
+        }
         try {
           await requireTransport().openPath(path);
         } catch (error) {
@@ -823,7 +898,7 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
 
       toggleDuplicatePath: (path) => dispatch({ type: 'duplicates-toggle-path', path }),
       clearDuplicateSelection: () => dispatch({ type: 'duplicates-clear-selection' }),
-      excludeDuplicatePath: (path) => dispatch({ type: 'duplicates-exclude-add', path }),
+      excludeDuplicatePath: (path, label) => dispatch({ type: 'duplicates-exclude-add', path, label }),
       removeDuplicateExclusion: (path) => dispatch({ type: 'duplicates-exclude-remove', path }),
 
       updateSettings: async (patch) => {
@@ -844,7 +919,7 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
 
       refreshProStatus: async () => {
         try {
-          dispatch({ type: 'pro-status', status: await requireTransport().proStatus() });
+          await applyPro(await requireTransport().proStatus());
         } catch (error) {
           toast({ kind: 'warning', title: 'Could not check Diskora Pro status', detail: describe(error) });
         }
@@ -852,7 +927,7 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
 
       verifyPro: async () => {
         try {
-          dispatch({ type: 'pro-status', status: await requireTransport().proVerify() });
+          await applyPro(await requireTransport().proVerify());
         } catch (error) {
           toast({ kind: 'error', title: 'Could not verify the purchase', detail: describe(error) });
           throw error;
@@ -877,22 +952,32 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       activateLicense: async (licenseKey) => {
         try {
           const status = await requireTransport().proActivate(licenseKey.trim());
-          dispatch({ type: 'pro-status', status });
+          await applyPro(status);
           if (status.enabled) {
             toast({ kind: 'success', title: 'Diskora Pro is active', detail: 'Both Pro features are unlocked on this device.' });
           } else {
             toast({ kind: 'error', title: 'Activation failed', detail: status.message });
           }
+          return status;
         } catch (error) {
           toast({ kind: 'error', title: 'Activation failed', detail: describe(error) });
           throw error;
         }
       },
 
+      reverifyPro: async () => {
+        // Silent: used at startup. Offline keeps the cached state, which the Pro page explains.
+        try {
+          await applyPro(await requireTransport().proVerify());
+        } catch {
+          // Keep the cached licence state.
+        }
+      },
+
       restorePurchases: async () => {
         try {
           const status = await requireTransport().proRestore();
-          dispatch({ type: 'pro-status', status });
+          await applyPro(status);
           if (status.enabled) {
             toast({ kind: 'success', title: 'Purchase restored', detail: status.message });
           } else {
@@ -902,21 +987,16 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
               detail: 'Dodo Payments reports no valid Diskora Pro licence for this device. Activate it with your license key instead.',
             });
           }
+          return status;
         } catch (error) {
           toast({ kind: 'error', title: 'Could not restore purchases', detail: describe(error) });
           throw error;
         }
       },
 
-      promptUpgrade: (feature) => {
-        toast({
-          kind: 'info',
-          title: `${feature} is a Diskora Pro feature`,
-          detail: 'Upgrade once to unlock it — $12.99, no subscription.',
-          timeoutMs: 7000,
-          action: { label: 'Upgrade to Pro', run: () => actions.navigate('pro') },
-        });
-      },
+      promptUpgrade: (feature) => dispatch({ type: 'upgrade-open', feature }),
+      openUpgrade: () => dispatch({ type: 'upgrade-open', feature: null }),
+      closeUpgrade: () => dispatch({ type: 'upgrade-close' }),
 
       /* ------------------------------ safe deletion ------------------------------ */
 
@@ -996,6 +1076,17 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       dismissToast: (id) => dispatch({ type: 'toast-dismiss', id }),
     };
   }, [toast]);
+
+  // Once the app is ready, re-check any stored licence with Dodo Payments in the background. The
+  // cached state is shown immediately, so an offline start is never blocked.
+  const proRecheckStarted = useRef(false);
+  useEffect(() => {
+    const pro = state.pro;
+    if (!state.ready || proRecheckStarted.current || !pro?.configured) return;
+    if (pro.state === 'not-purchased' || pro.state === 'not-configured') return;
+    proRecheckStarted.current = true;
+    void actions.reverifyPro();
+  }, [state.ready, state.pro, actions]);
 
   // Poll results as well as receiving progress. Very short scans can finish before
   // scanStart's IPC response arrives; relying solely on a final event loses that race.

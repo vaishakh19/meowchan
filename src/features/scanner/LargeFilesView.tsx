@@ -6,8 +6,9 @@
  * its real location in File Explorer.
  */
 
+import { shownPath } from '@/lib/path';
 import { useEffect, useMemo, useState } from 'react';
-import { FileSearch, FolderOpen, Search } from 'lucide-react';
+import { FileSearch, FolderOpen, Lock, Search } from 'lucide-react';
 import { useApp } from '@/app/state';
 import { useItemMenu } from '@/app/itemMenu';
 import { Button, EmptyState, ErrorState, Panel, Select, TextField, cx } from '@/components/ui/primitives';
@@ -255,6 +256,7 @@ export function LargeFilesView(): React.JSX.Element {
                   }
                 }}
               >
+                {proEnabled ? null : <Lock aria-hidden className="size-3" />}
                 Move to Recycle Bin (Pro)
               </Button>
             </div>
@@ -331,8 +333,8 @@ export function LargeFilesView(): React.JSX.Element {
                     <span className="rounded bg-info-soft px-1 text-[9px] font-medium text-info">Cloud: Pinned</span>
                   ) : null}
                 </div>
-                <p className="truncate font-mono text-[9px] text-ink-faint" title={item.path}>
-                  {item.path}
+                <p className="truncate font-mono text-[9px] text-ink-faint" title={shownPath(item)}>
+                  {shownPath(item)}
                 </p>
               </div>
               <span className="dw-tnum w-20 shrink-0 text-right text-[11px] text-ink-muted">

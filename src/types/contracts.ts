@@ -112,6 +112,7 @@ export type ScanErrorKind =
 
 export interface ScanErrorInfo {
   path: string;
+  displayPath?: string;
   kind: ScanErrorKind;
   /** OS error message, never containing file contents. */
   message: string;
@@ -153,8 +154,10 @@ export interface ScanProgress {
   foldersScanned: number;
   bytesAnalyzed: number;
   errors: number;
-  /** Directory currently being read. */
+  /** Directory currently being read (identity token on the free tier). */
   currentPath: string;
+  /** Masked (free) or real (Pro) form of `currentPath`, for display. */
+  currentPathDisplay?: string;
   elapsedMs: number;
   /**
    * Estimated remaining milliseconds, or `null` when no reliable estimate exists yet.
@@ -172,7 +175,13 @@ export type CloudStatus = 'online-only' | 'locally-available' | 'pinned' | 'none
 export interface TreeNode {
   /** Path-derived stable id (`path` hashed). Never changes between scans of the same path. */
   id: string;
+  /**
+   * Identity token for this item. It is the real absolute path with a Diskora Pro licence, and an
+   * opaque `ref:<id>` token on the free tier. Use it as a key and pass it back to the backend.
+   */
   path: string;
+  /** Masked (free) or real (Pro) path to show a person. Use `shownPath()` rather than reading this directly. */
+  displayPath?: string;
   name: string;
   kind: 'folder' | 'file';
   /** Sum of logical file sizes in this subtree. */
@@ -200,6 +209,7 @@ export interface TreeNode {
 export interface ScanSummary {
   scanId: string;
   rootPath: string;
+  rootPathDisplay?: string;
   rootName: string;
   startedAt: number;
   finishedAt: number | null;
@@ -219,6 +229,7 @@ export interface ScanSummary {
 export interface ScanResult {
   scanId: string;
   rootPath: string;
+  rootPathDisplay?: string;
   rootName: string;
   startedAt: number;
   finishedAt: number | null;
@@ -281,6 +292,7 @@ export interface LargeFileQuery {
 
 export interface LargeFile {
   path: string;
+  displayPath?: string;
   name: string;
   sizeBytes: number;
   diskSizeBytes: number | null;
@@ -321,6 +333,7 @@ export interface DuplicateOptions {
 
 export interface DuplicateFile {
   path: string;
+  displayPath?: string;
   name: string;
   sizeBytes: number;
   modifiedAt: number | null;
@@ -370,6 +383,7 @@ export interface DuplicateVerifyResult {
 
 export interface FileDetails {
   path: string;
+  displayPath?: string;
   name: string;
   kind: 'folder' | 'file';
   sizeBytes: number;
@@ -387,6 +401,8 @@ export interface FileDetails {
   cloudStatus?: CloudStatus | null;
   isReadOnly: boolean;
   parentPath: string | null;
+  /** Masked (free) or real (Pro) parent folder, for display. */
+  parentPathDisplay?: string | null;
 }
 
 export interface AppVersion {
@@ -406,9 +422,13 @@ export interface AppVersion {
  * server-verified entitlement (or a recently verified one during the
  * documented offline grace window).
  */
+export type ProState = 'active' | 'offline' | 'not-purchased' | 'invalid' | 'unverified' | 'not-configured';
+
 export interface ProStatus {
   /** True when a verified Diskora Pro purchase is active on this device. */
   enabled: boolean;
+  /** Machine-readable state; the UI chooses copy and badges from this. */
+  state: ProState;
   /** False when this build has no Dodo Payments product configured. */
   configured: boolean;
   /** Masked key (`ABCD…WXYZ`), when an entitlement is stored. */
@@ -460,7 +480,9 @@ export interface UserStorageProfile {
   fileCount: number;
   folderCount: number;
   categories: Partial<Record<StorageCategory, number>>;
-  topFolders: Array<{ name: string; path: string; sizeBytes: number }>;
+  /** Identity token (free) or real path (Pro). */
+  userPathDisplay?: string;
+  topFolders: Array<{ name: string; path: string; displayPath?: string; sizeBytes: number }>;
 }
 
 export interface UserStorageReport {
@@ -482,6 +504,7 @@ export interface CsvExportRequest {
 
 export interface FolderGrowthDiff {
   path: string;
+  displayPath?: string;
   name: string;
   baselineBytes: number;
   currentBytes: number;
@@ -489,6 +512,8 @@ export interface FolderGrowthDiff {
 }
 
 export interface ScanGrowthComparison {
+  baselineRootDisplay?: string;
+  currentRootDisplay?: string;
   baselineScanId: string;
   currentScanId: string;
   baselineStartedAt: number;

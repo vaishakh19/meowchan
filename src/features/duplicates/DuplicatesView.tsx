@@ -11,6 +11,7 @@
  * retained.
  */
 
+import { shownPath } from '@/lib/path';
 import { useState } from 'react';
 import { Copy, FolderOpen, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useApp } from '@/app/state';
@@ -172,7 +173,7 @@ export function DuplicatesView(): React.JSX.Element {
                 expanded={expanded === group.groupId}
                 onToggle={() => setExpanded(expanded === group.groupId ? null : group.groupId)}
                 onReveal={(path) => void actions.reveal(path)}
-                onExclude={(path) => actions.excludeDuplicatePath(path)}
+                onExclude={(path, label) => actions.excludeDuplicatePath(path, label)}
                 onVerify={(pathA, pathB) => actions.verifyDuplicateFiles(pathA, pathB)}
                 onContextMenu={(path, x, y) => itemMenu.open(path, x, y, 'file')}
               />
@@ -192,8 +193,8 @@ export function DuplicatesView(): React.JSX.Element {
                 className="flex items-center gap-1 rounded-full border border-line bg-surface-sunken px-2 py-0.5 text-[10px] text-ink-muted"
               >
                 <ShieldOff aria-hidden className="size-2.5" />
-                <span className="max-w-64 truncate" title={path}>
-                  {path}
+                <span className="max-w-64 truncate" title={state.duplicates.excludeLabels[path] ?? path}>
+                  {state.duplicates.excludeLabels[path] ?? path}
                 </span>
                 <button type="button" className="underline hover:text-ink" onClick={() => actions.removeDuplicateExclusion(path)}>
                   remove
@@ -222,7 +223,7 @@ function GroupCard({
   expanded: boolean;
   onToggle: () => void;
   onReveal: (path: string) => void;
-  onExclude: (path: string) => void;
+  onExclude: (path: string, label?: string) => void;
   onVerify: (pathA: string, pathB: string) => Promise<DuplicateVerifyResult>;
   onContextMenu: (path: string, x: number, y: number) => void;
 }): React.JSX.Element {
@@ -314,8 +315,8 @@ function GroupCard({
                       }}
                     >
                       <td className="px-2.5 py-1.5">
-                        <p className="truncate font-mono text-[11px] text-ink" title={copy.path}>
-                          {copy.path}
+                        <p className="truncate font-mono text-[11px] text-ink" title={shownPath(copy)}>
+                          {shownPath(copy)}
                         </p>
                         <p className="text-[9px] text-ink-faint">
                           {copy.name}
@@ -334,7 +335,7 @@ function GroupCard({
                           <Button size="sm" variant="ghost" onClick={() => onReveal(copy.path)} title="Reveal in File Explorer">
                             <FolderOpen aria-hidden className="size-3" />
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => onExclude(copy.path)} title="Exclude this file">
+                          <Button size="sm" variant="ghost" onClick={() => onExclude(copy.path, shownPath(copy))} title="Exclude this file">
                             <ShieldOff aria-hidden className="size-3" />
                           </Button>
                         </div>

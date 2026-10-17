@@ -25,6 +25,8 @@ import type { StorageCategory, TreeNode } from '@/types/contracts';
 export interface SunburstArc {
   id: string;
   path: string;
+  /** Masked (free) or real (Pro) path, for display only. */
+  displayPath: string;
   name: string;
   kind: 'folder' | 'file';
   /** 0 = root (not rendered), 1 = first ring. */
@@ -120,6 +122,7 @@ export function buildSunburstLayout(root: TreeNode, options: SunburstOptions = {
     all.push({
       id: data.id,
       path: data.path,
+      displayPath: data.displayPath ?? data.path,
       name: data.name,
       kind: data.kind,
       depth: node.depth,
@@ -215,6 +218,7 @@ export function arcAtPoint(arcs: SunburstArc[], radius: number, angle: number): 
 export interface TreemapCell {
   id: string;
   path: string;
+  displayPath: string;
   name: string;
   depth: number;
   category: StorageCategory;
@@ -274,6 +278,7 @@ export function buildTreemapLayout(root: TreeNode, options: TreemapOptions): Tre
     cells.push({
       id: node.data.id,
       path: node.data.path,
+      displayPath: node.data.displayPath ?? node.data.path,
       name: node.data.name,
       depth: node.depth,
       category: node.data.category,

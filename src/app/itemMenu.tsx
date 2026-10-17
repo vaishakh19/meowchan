@@ -11,6 +11,8 @@ import { Copy, Crosshair, FolderOpen, ExternalLink, ShieldOff, Trash2 } from 'lu
 import { useContextMenu, type ContextMenuItem } from '@/components/ui/ContextMenu';
 import { useApp } from './state';
 import { isSyntheticPath } from '@/lib/tree';
+import { findNode } from '@/features/visualization/layout';
+import { shownPath } from '@/lib/path';
 import { ProBadge } from '@/components/ui/primitives';
 
 interface ItemMenuApi {
@@ -26,18 +28,29 @@ export function ItemMenuProvider({ children }: { children: ReactNode }): React.J
 
   const open = useCallback(
     (path: string, x: number, y: number, kind: 'file' | 'folder' = 'folder') => {
-      const synthetic = isSyntheticPath(path);
+      const node = state.scan.result ? findNode(state.scan.result.tree, path) : null;
+      const synthetic = node ? node.synthetic : isSyntheticPath(path);
       const pro = state.pro?.enabled === true;
       const isScanRoot = path === state.scan.result?.rootPath;
       const items: ContextMenuItem[] = [
         {
-          label: 'Reveal in File Explorer',
+          label: (
+            <span className="flex items-center gap-1.5">
+              Reveal in File Explorer
+              {!pro ? <ProBadge /> : null}
+            </span>
+          ),
           icon: <FolderOpen aria-hidden className="size-3.5" />,
           disabled: synthetic,
           onSelect: () => void actions.reveal(path),
         },
         {
-          label: kind === 'file' ? 'Open with default app' : 'Open folder',
+          label: (
+            <span className="flex items-center gap-1.5">
+              {kind === 'file' ? 'Open with default app' : 'Open folder'}
+              {!pro ? <ProBadge /> : null}
+            </span>
+          ),
           icon: <ExternalLink aria-hidden className="size-3.5" />,
           disabled: synthetic,
           onSelect: () => void actions.open(path),
@@ -83,13 +96,13 @@ export function ItemMenuProvider({ children }: { children: ReactNode }): React.J
           label: `Exclude this ${kind} from duplicate scans`,
           icon: <ShieldOff aria-hidden className="size-3.5" />,
           separatorBefore: true,
-          onSelect: () => actions.excludeDuplicatePath(path),
+          onSelect: () => actions.excludeDuplicatePath(path, node ? shownPath(node) : undefined),
         });
       }
 
       menu.open(x, y, items);
     },
-    [actions, menu, state.route, state.pro?.enabled, state.scan.result?.rootPath],
+    [actions, menu, state.route, state.pro?.enabled, state.scan.result],
   );
 
   const value = useMemo<ItemMenuApi>(() => ({ open }), [open]);

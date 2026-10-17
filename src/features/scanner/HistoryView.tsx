@@ -112,7 +112,7 @@ function RecordDetail({ record }: { record: ScanSummary }): React.JSX.Element {
       <SectionTitle className="px-0 pt-0">Scan details</SectionTitle>
       <dl className="dw-tnum space-y-1 text-[11px]">
         <Row label="Volume" value={record.rootName} />
-        <Row label="Path" value={record.rootPath} mono />
+        <Row label="Path" value={record.rootPathDisplay ?? record.rootPath} mono />
         <Row label="Started" value={formatDateTime(record.startedAt)} />
         <Row label="Finished" value={record.finishedAt === null ? '—' : formatDateTime(record.finishedAt)} />
         <Row label="Duration" value={record.durationMs === null ? '—' : formatDuration(record.durationMs)} />

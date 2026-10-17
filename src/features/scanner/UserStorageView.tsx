@@ -134,8 +134,8 @@ export function UserStorageView({ onClose }: { onClose?: () => void }): React.JS
                       </div>
                       <div className="min-w-0">
                         <h3 className="font-semibold text-sm text-ink truncate">{user.username}</h3>
-                        <p className="font-mono text-[10px] text-ink-muted truncate" title={user.userPath}>
-                          {user.userPath}
+                        <p className="font-mono text-[10px] text-ink-muted truncate" title={user.userPathDisplay ?? user.userPath}>
+                          {user.userPathDisplay ?? user.userPath}
                         </p>
                       </div>
                     </div>

@@ -220,3 +220,12 @@ export function breadcrumbs(p: string): Breadcrumb[] {
   }
   return out;
 }
+
+/**
+ * The text to show a person for a path-bearing item. On the free tier the backend sends an
+ * opaque identity token in `path` and a masked form in `displayPath`; with Pro both are real.
+ * Always display through this helper, and always use `path` as the identity.
+ */
+export function shownPath(item: { path: string; displayPath?: string | null }): string {
+  return item.displayPath ?? item.path;
+}

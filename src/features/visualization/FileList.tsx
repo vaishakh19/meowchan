@@ -24,6 +24,8 @@ export interface FileListProps {
   root: TreeNode;
   rootPath: string;
   scanRootPath: string;
+  /** Parent folder identity. Pass it from the tree; when omitted the path text is used (Pro). */
+  upPath?: string | null;
   selectedPath: string | null;
   sort: SortKey;
   sortDir: 'asc' | 'desc';
@@ -41,6 +43,7 @@ export function FileList({
   root,
   rootPath,
   scanRootPath,
+  upPath,
   selectedPath,
   sort,
   sortDir,
@@ -64,8 +67,8 @@ export function FileList({
   const queryKey = `${scanId}\u0000${rootPath}\u0000${sort}\u0000${sortDir}\u0000${search.trim()}`;
   queryRef.current = { scanId, path: rootPath, sort, sortDir, search: search.trim() };
   const rootName = rootPath === root.path ? root.name : baseName(rootPath) || root.name;
-  const upPath = parentPath(rootPath);
-  const canGoUp = rootPath.toLowerCase() !== scanRootPath.toLowerCase() && upPath !== null;
+  const upTarget = upPath !== undefined ? upPath : parentPath(rootPath);
+  const canGoUp = rootPath.toLowerCase() !== scanRootPath.toLowerCase() && upTarget !== null;
   totalRef.current = total;
 
   useEffect(() => {
@@ -152,10 +155,10 @@ export function FileList({
   return (
     <div className={cx('flex min-h-0 flex-col', className)} data-testid="file-list">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-2 py-1.5">
-        {canGoUp && upPath ? (
+        {canGoUp && upTarget ? (
           <button
             type="button"
-            onClick={() => onOpen(upPath)}
+            onClick={() => onOpen(upTarget)}
             className="rounded border border-line px-2 py-1 text-[10px] text-ink-muted hover:bg-surface-sunken hover:text-ink"
             aria-label="Open parent folder"
           >

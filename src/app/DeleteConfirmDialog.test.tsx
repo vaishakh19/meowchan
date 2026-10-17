@@ -10,6 +10,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AppStateProvider, useApp } from './state';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
+import { UpgradeDialog } from '@/features/pro/UpgradeDialog';
 import { ToastHost } from '@/components/ui/feedback';
 import { __setTransport } from '@/lib/transport';
 import { createTauriTransport } from '@/lib/backend/tauriTransport';
@@ -24,6 +25,7 @@ const FILE_PATH = 'C:\\fixture\\a.bin';
 function proStatus(enabled: boolean) {
   return {
     enabled,
+    state: enabled ? 'active' : 'not-purchased',
     configured: true,
     licenseKey: enabled ? 'ABCD…5678' : null,
     activatedAt: enabled ? 1_770_000_000_000 : null,
@@ -114,6 +116,7 @@ function renderHarness() {
     <AppStateProvider>
       <Harness />
       <DeleteConfirmDialog />
+      <UpgradeDialog />
       <ToastWire />
     </AppStateProvider>,
   );
@@ -128,6 +131,7 @@ beforeEach(() => {
     if (command === 'list_drives') return [];
     if (command === 'scan_list') return [];
     if (command === 'pro_status') return proStatus(true);
+    if (command === 'pro_verify') return proStatus(true);
     if (command === 'scan_start') return SCAN_ID;
     if (command === 'scan_get') return scanResult;
     if (command === 'delete_items') {
@@ -149,6 +153,7 @@ describe('safe deletion (Diskora Pro)', () => {
   it('refuses to open the dialog while Pro is locked', async () => {
     invoke.mockImplementation(async (command: string) => {
       if (command === 'pro_status') return proStatus(false);
+      if (command === 'pro_verify') return proStatus(false);
       if (command === 'settings_get') return { theme: 'system', followLinks: false, maxChildrenPerNode: 100 };
       if (command === 'list_drives') return [];
       if (command === 'scan_list') return [];
@@ -158,12 +163,13 @@ describe('safe deletion (Diskora Pro)', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('pro_status', undefined));
     await userEvent.setup().click(screen.getByRole('button', { name: 'request-deletion' }));
 
-    // The upgrade prompt is the whole response; no dialog, no IPC.
+    // A locked action opens the upgrade dialog (never the delete confirmation) and calls no delete.
     await waitFor(() =>
-      expect(screen.getByText('Safe file deletion is a Diskora Pro feature')).toBeDefined(),
+      expect(screen.getByRole('dialog', { name: 'Upgrade to Diskora Pro' })).toBeDefined(),
     );
+    expect(screen.getByText(/Safe file deletion is a Diskora Pro feature/)).toBeDefined();
+    expect(screen.queryByText('Confirm deletion')).toBeNull();
     expect(invoke.mock.calls.filter(([command]) => command === 'delete_items')).toHaveLength(0);
-    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('lists name, full path and size, and deletes only after confirmation', async () => {
@@ -220,6 +226,7 @@ describe('safe deletion (Diskora Pro)', () => {
   it('reports backend failures honestly instead of claiming success', async () => {
     invoke.mockImplementation(async (command: string) => {
       if (command === 'pro_status') return proStatus(true);
+      if (command === 'pro_verify') return proStatus(true);
       if (command === 'settings_get') return { theme: 'system', followLinks: false, maxChildrenPerNode: 100 };
       if (command === 'list_drives') return [];
       if (command === 'scan_list') return [];

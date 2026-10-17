@@ -5,6 +5,7 @@
  * Shows net byte changes, category-level growth deltas, and the top growing / freed directories.
  */
 
+import { shownPath } from '@/lib/path';
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, GitCompare, TrendingDown, TrendingUp } from 'lucide-react';
 import { useApp } from '@/app/state';
@@ -201,7 +202,7 @@ export function CompareScansView({ onClose }: { onClose?: () => void }): React.J
                     >
                       <div className="min-w-0 flex-1 truncate pr-2">
                         <p className="font-medium text-ink truncate">{f.name}</p>
-                        <p className="font-mono text-[9px] text-ink-faint truncate">{f.path}</p>
+                        <p className="font-mono text-[9px] text-ink-faint truncate">{shownPath(f)}</p>
                       </div>
                       <span className="dw-tnum font-semibold text-warn shrink-0">
                         +{formatBytes(f.deltaBytes)}
@@ -228,7 +229,7 @@ export function CompareScansView({ onClose }: { onClose?: () => void }): React.J
                     >
                       <div className="min-w-0 flex-1 truncate pr-2">
                         <p className="font-medium text-ink truncate">{f.name}</p>
-                        <p className="font-mono text-[9px] text-ink-faint truncate">{f.path}</p>
+                        <p className="font-mono text-[9px] text-ink-faint truncate">{shownPath(f)}</p>
                       </div>
                       <span className="dw-tnum font-semibold text-ok shrink-0">
                         {formatBytes(f.deltaBytes)}

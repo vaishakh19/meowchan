@@ -221,7 +221,8 @@ pub fn disclosed<T: Serialize>(value: &T) -> AppResult<Value> {
 /// Turns an identity token from the webview back into a real path.
 ///
 /// Real paths pass through unchanged, so existing callers keep working. Tokens are looked up
-/// in `scan_hint` first, then in every scan this session knows about.
+/// in `scan_hint` first, then in every scan this session knows about, then in persisted scan
+/// history (so a root from an earlier session can still be rescanned).
 pub fn resolve_path(state: &AppState, scan_hint: Option<&str>, input: &str) -> AppResult<String> {
     let Some(id) = ref_id(input) else {
         return Ok(input.to_string());
@@ -233,16 +234,23 @@ pub fn resolve_path(state: &AppState, scan_hint: Option<&str>, input: &str) -> A
         .filter(|(key, _)| Some(key.as_str()) != scan_hint)
         .map(|(_, entry)| entry);
     for entry in hinted.into_iter().chain(others) {
-        if let Some(path) = resolve_in_entry(entry, id)? {
+        if let Some(path) = resolve_in_entry(entry, input, id)? {
             return Ok(path);
         }
+    }
+    drop(scans);
+    if let Some(path) = resolve_persisted_root(state, input) {
+        return Ok(path);
     }
     Err(AppError::NotFound(
         "That item is no longer in the scan. Rescan the drive to refresh the results.".to_string(),
     ))
 }
 
-fn resolve_in_entry(entry: &Arc<ScanEntry>, id: &str) -> AppResult<Option<String>> {
+fn resolve_in_entry(entry: &Arc<ScanEntry>, token: &str, id: &str) -> AppResult<Option<String>> {
+    if path_ref(&entry.root_path) == token {
+        return Ok(Some(entry.root_path.clone()));
+    }
     let Some(index) = entry.index.as_ref() else {
         return Ok(None);
     };
@@ -252,6 +260,14 @@ fn resolve_in_entry(entry: &Arc<ScanEntry>, id: &str) -> AppResult<Option<String
     Ok(guard
         .path_for_ref(id)
         .map(|path| path.to_string_lossy().to_string()))
+}
+
+/// Roots of persisted scan history. Only a root can be recovered this way; contents are not.
+fn resolve_persisted_root(state: &AppState, token: &str) -> Option<String> {
+    let guard = state.database().ok()?;
+    let database = guard.as_ref()?;
+    let rows = database.list_scan_history(500).ok()?;
+    rows.into_iter().map(|row| row.root_path).find(|root| path_ref(root) == token)
 }
 
 #[cfg(test)]

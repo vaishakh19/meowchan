@@ -8,6 +8,7 @@
 
 import type { StorageCategory, TreeNode } from '@/types/contracts';
 import { collectFiles, collectFolders } from '@/lib/tree';
+import { shownPath } from '@/lib/path';
 
 export type QuickWinId =
   | 'downloads'
@@ -93,7 +94,7 @@ export function computeQuickWins(root: TreeNode, options: { largeUnusedDays?: nu
   const tempFolders = folders.filter(
     (folder) =>
       matchesName(folder, new Set(['temp', 'tmp'])) ||
-      TEMP_PATH_TOKENS.some((token) => isUnder(`\\${folder.path.toLowerCase()}\\`, token)),
+      TEMP_PATH_TOKENS.some((token) => isUnder(`\\${shownPath(folder).toLowerCase()}\\`, token)),
   );
   if (tempFolders.length > 0) {
     wins.push({
@@ -114,7 +115,7 @@ export function computeQuickWins(root: TreeNode, options: { largeUnusedDays?: nu
     (folder) =>
       !tempPaths.has(folder.path.toLowerCase()) &&
       (CACHE_FOLDER_TOKENS.some((token) => folder.name.toLowerCase().includes(token)) ||
-        (isUnder(folder.path, '\\appdata\\local\\') && folder.name.toLowerCase().endsWith('cache'))),
+        (isUnder(shownPath(folder), '\\appdata\\local\\') && folder.name.toLowerCase().endsWith('cache'))),
   );
   if (cacheFolders.length > 0) {
     wins.push({

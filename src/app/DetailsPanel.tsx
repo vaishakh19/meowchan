@@ -20,7 +20,7 @@ import {
   formatDateTime,
   formatRelativeTime,
 } from '@/lib/format';
-import { baseName, maskPath, parentPath } from '@/lib/path';
+import { baseName, parentPath, shownPath } from '@/lib/path';
 import { findNode, largestChildren } from '@/features/visualization/layout';
 import { isSyntheticPath } from '@/lib/tree';
 import { useApp } from './state';
@@ -36,7 +36,9 @@ export function DetailsPanel(): React.JSX.Element {
   }, [scan.result, viz.selectedPath, details.data]);
 
   const selected = viz.selectedPath !== null;
-  const synthetic = viz.selectedPath ? isSyntheticPath(viz.selectedPath) : false;
+  const liveDetails = details.data?.path === viz.selectedPath ? details.data : null;
+  const shownText = node ? shownPath(node) : liveDetails ? shownPath(liveDetails) : '';
+  const synthetic = node ? node.synthetic : (viz.selectedPath ? isSyntheticPath(viz.selectedPath) : false);
   const isScanRoot = viz.selectedPath === scan.result?.rootPath;
 
   return (
@@ -112,11 +114,11 @@ export function DetailsPanel(): React.JSX.Element {
               <p
                 className="min-w-0 flex-1 break-all rounded-control bg-surface-sunken px-2 py-1.5 font-mono text-[10px] leading-relaxed text-ink-muted"
                 data-testid="details-path"
-                title={proEnabled ? viz.selectedPath ?? '' : 'The full path is a Diskora Pro feature'}
+                title={proEnabled ? viz.selectedPath ?? '' : 'Full paths are a Diskora Pro feature'}
               >
-                {proEnabled ? viz.selectedPath : maskPath(viz.selectedPath ?? '')}
+                {shownText}
               </p>
-              {!proEnabled ? <ProBadge /> : null}
+              {!proEnabled ? <Lock aria-hidden className="size-3 shrink-0 text-ink-faint" /> : null}
             </div>
 
             <div className="mt-2 flex flex-wrap gap-1">
@@ -124,10 +126,11 @@ export function DetailsPanel(): React.JSX.Element {
                 size="sm"
                 onClick={() => void actions.reveal(viz.selectedPath!)}
                 disabled={synthetic}
-                title="Open File Explorer with this item selected"
+                title={proEnabled ? 'Open File Explorer with this item selected' : 'Reveal in File Explorer is a Diskora Pro feature'}
               >
-                <FolderOpen aria-hidden className="size-3" />
+                {proEnabled ? <FolderOpen aria-hidden className="size-3" /> : <Lock aria-hidden className="size-3" />}
                 Reveal
+                {!proEnabled ? <ProBadge /> : null}
               </Button>
               <Button
                 size="sm"
@@ -141,8 +144,9 @@ export function DetailsPanel(): React.JSX.Element {
               </Button>
               {node?.kind === 'file' ? (
                 <Button size="sm" onClick={() => void actions.open(viz.selectedPath!)} disabled={synthetic}>
-                  <ExternalLink aria-hidden className="size-3" />
+                  {proEnabled ? <ExternalLink aria-hidden className="size-3" /> : <Lock aria-hidden className="size-3" />}
                   Open
+                  {!proEnabled ? <ProBadge /> : null}
                 </Button>
               ) : null}
               {node && node.kind === 'folder' ? (
@@ -221,7 +225,16 @@ export function DetailsPanel(): React.JSX.Element {
           <Panel className="p-2.5">
             <SectionTitle className="px-0 pt-0 pb-1">Details</SectionTitle>
             <dl className="space-y-1 text-[11px]">
-              <Meta label="Parent folder" value={parentPath(viz.selectedPath ?? '') ?? 'Volume root'} mono />
+              <Meta
+                label="Parent folder"
+                value={
+                  liveDetails?.parentPathDisplay ??
+                  liveDetails?.parentPath ??
+                  (proEnabled ? parentPath(viz.selectedPath ?? '') : null) ??
+                  (liveDetails ? 'Volume root' : '—')
+                }
+                mono
+              />
               <Meta label="Extension" value={node?.extension ? `.${node.extension}` : '—'} />
               {node?.isJunction || node?.isSymlink ? (
                 <Meta label="Link target" value="Reparse link (safe: target not traversed or double-counted)" />

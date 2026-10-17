@@ -6,6 +6,7 @@
  * instead of showing a fake chart.
  */
 
+import { shownPath } from '@/lib/path';
 import { useMemo } from 'react';
 import {
   ArrowRight,
@@ -253,8 +254,8 @@ export function HomeView(): React.JSX.Element {
                   <p className="mb-1 text-[10px] font-medium text-ink-muted">Diskora could not read:</p>
                   <ul className="space-y-0.5">
                     {result.errors.slice(0, 8).map((error) => (
-                      <li key={error.path} className="truncate font-mono text-[9px] text-ink-faint" title={error.path}>
-                        {error.path} — {error.kind}
+                      <li key={error.path} className="truncate font-mono text-[9px] text-ink-faint" title={shownPath(error)}>
+                        {shownPath(error)} — {error.kind}
                       </li>
                     ))}
                   </ul>
