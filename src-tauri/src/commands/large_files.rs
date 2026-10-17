@@ -88,8 +88,7 @@ pub fn list_large_files(query: LargeFileQuery, state: State<'_, AppState>) -> Ap
         .collect();
 
     let mut matched: Vec<LargeFile> = index
-        .files
-        .iter()
+        .active_files()
         .filter(|file| file.size >= query.min_bytes)
         .filter(|file| {
             if extensions.is_empty() {
@@ -127,7 +126,9 @@ pub fn list_large_files(query: LargeFileQuery, state: State<'_, AppState>) -> Ap
         })
         .collect();
 
-    let total_bytes: u64 = matched.iter().map(|item| item.size_bytes).sum();
+    let total_bytes = matched
+        .iter()
+        .fold(0u64, |total, item| total.saturating_add(item.size_bytes));
 
     match query.sort.as_str() {
         "size-asc" => matched.sort_by(|a, b| a.size_bytes.cmp(&b.size_bytes)),
@@ -175,8 +176,8 @@ mod tests {
             disk_size: None,
             modified_at: modified,
             extension: Some(extension.to_string()),
-            parent_path: PathBuf::from("C:\\"),
             depth: 1,
+            ..Default::default()
         }
     }
 

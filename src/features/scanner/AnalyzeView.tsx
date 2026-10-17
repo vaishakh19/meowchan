@@ -42,7 +42,7 @@ import {
 import { formatBytes, formatCount, formatDateTime, formatDuration, formatPercent } from '@/lib/format';
 import { categoryBreakdown } from '@/features/visualization/layout';
 import { categoryColor, categoryLabel } from '@/lib/categories';
-import { breadcrumbs } from '@/lib/path';
+import { breadcrumbs, isWithin } from '@/lib/path';
 import type { ViewMode } from '@/app/state';
 
 export function AnalyzeView(): React.JSX.Element {
@@ -54,10 +54,15 @@ export function AnalyzeView(): React.JSX.Element {
   const [exporting, setExporting] = useState(false);
 
   const itemMenu = useItemMenu();
-  const openMenu = (path: string, x: number, y: number) =>
-    itemMenu.open(path, x, y, focusNode?.children.find((child) => child.path === path)?.kind ?? 'folder');
+  const openMenu = (path: string, x: number, y: number, kind?: 'file' | 'folder') =>
+    itemMenu.open(path, x, y, kind ?? focusNode?.children.find((child) => child.path === path)?.kind ?? 'folder');
 
-  const crumbs = useMemo(() => (result ? breadcrumbs(result.rootPath) : []), [result]);
+  const activePath = result
+    ? viz.mode === 'list'
+      ? viz.focusPath ?? result.rootPath
+      : focusNode?.path ?? result.rootPath
+    : null;
+  const crumbs = useMemo(() => (activePath ? breadcrumbs(activePath) : []), [activePath]);
 
   const handleExportCsv = async () => {
     if (!result) return;
@@ -94,9 +99,11 @@ export function AnalyzeView(): React.JSX.Element {
             <div className="w-full max-w-sm">
               <ProgressBar
                 value={scan.progress.percent === null ? 0 : scan.progress.percent / 100}
+                indeterminate={scan.progress.percent === null}
                 label="Scan progress"
               />
               <dl className="dw-tnum mt-2 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
+                <Stat label="Entries" value={formatCount(scan.progress.entriesScanned)} />
                 <Stat label="Files" value={formatCount(scan.progress.filesScanned)} />
                 <Stat label="Folders" value={formatCount(scan.progress.foldersScanned)} />
                 <Stat label="Analyzed" value={formatBytes(scan.progress.bytesAnalyzed)} />
@@ -143,7 +150,7 @@ export function AnalyzeView(): React.JSX.Element {
     );
   }
 
-  const breakdown = categoryBreakdown(focusNode).slice(0, 6);
+  const breakdown = focusNode.path === activePath ? categoryBreakdown(focusNode).slice(0, 6) : [];
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="analyze-view">
@@ -153,16 +160,18 @@ export function AnalyzeView(): React.JSX.Element {
           <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-0.5 text-[12px]">
             {crumbs.map((crumb, index) => {
               const last = index === crumbs.length - 1;
+              const isScannedPath = isWithin(crumb.path, result.rootPath);
+              const disabled = last || !isScannedPath;
               return (
                 <span key={crumb.path} className="flex items-center gap-0.5">
                   {index > 0 ? <ChevronRight aria-hidden className="size-3 text-ink-faint" /> : null}
                   <button
                     type="button"
-                    disabled={last}
+                    disabled={disabled}
                     onClick={() => actions.focusPath(crumb.path)}
                     className={cx(
                       'rounded px-1 py-px transition-colors',
-                      last ? 'font-medium text-ink' : 'text-ink-muted hover:bg-surface-sunken hover:text-ink',
+                      disabled ? 'font-medium text-ink' : 'text-ink-muted hover:bg-surface-sunken hover:text-ink',
                     )}
                     aria-current={last ? 'location' : undefined}
                   >
@@ -171,15 +180,9 @@ export function AnalyzeView(): React.JSX.Element {
                 </span>
               );
             })}
-            {viz.focusPath && viz.focusPath !== result.rootPath ? (
-              <>
-                <ChevronRight aria-hidden className="size-3 text-ink-faint" />
-                <span className="rounded px-1 py-px font-medium text-ink">{focusNode.name}</span>
-              </>
-            ) : null}
           </nav>
-          <p className="mt-0.5 truncate font-mono text-[10px] text-ink-faint" title={focusNode.path}>
-            {focusNode.path}
+          <p className="mt-0.5 truncate font-mono text-[10px] text-ink-faint" title={activePath ?? focusNode.path}>
+            {activePath ?? focusNode.path}
           </p>
         </div>
 
@@ -218,16 +221,18 @@ export function AnalyzeView(): React.JSX.Element {
           ]}
         />
 
-        <span className="relative">
-          <Search aria-hidden className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-ink-faint" />
-          <input
-            value={viz.search}
-            onChange={(event) => actions.setSearch(event.target.value)}
-            placeholder="Search within results"
-            aria-label="Search within results"
-            className="h-7 w-44 rounded-control border border-line bg-surface pl-7 pr-2 text-xs text-ink placeholder:text-ink-faint focus:border-info focus:outline-none"
-          />
-        </span>
+        {viz.mode !== 'list' ? (
+          <span className="relative">
+            <Search aria-hidden className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-ink-faint" />
+            <input
+              value={viz.search}
+              onChange={(event) => actions.setSearch(event.target.value)}
+              placeholder="Search within results"
+              aria-label="Search within results"
+              className="h-7 w-44 rounded-control border border-line bg-surface pl-7 pr-2 text-xs text-ink placeholder:text-ink-faint focus:border-info focus:outline-none"
+            />
+          </span>
+        ) : null}
 
         <div className="ml-auto flex items-center gap-1">
           <Button
@@ -249,9 +254,14 @@ export function AnalyzeView(): React.JSX.Element {
             <Download aria-hidden className="size-3" />
             {exporting ? 'Exporting…' : 'Export CSV'}
           </Button>
+          {result.prunedNodes > 0 ? (
+            <Badge tone="warn" className="mr-1">
+              {formatCount(result.prunedNodes)} tree items folded into “Other”
+            </Badge>
+          ) : null}
           {result.truncated ? (
             <Badge tone="warn" className="mr-1">
-              {formatCount(result.prunedNodes)} items folded into “Other”
+              Entry safety limit reached
             </Badge>
           ) : null}
           {result.status === 'partial' ? (
@@ -316,14 +326,15 @@ export function AnalyzeView(): React.JSX.Element {
           <FileList
             root={focusNode}
             selectedPath={viz.selectedPath}
+            scanId={result.scanId}
+            rootPath={viz.focusPath ?? result.rootPath}
+            scanRootPath={result.rootPath}
             sort={viz.sort}
             sortDir={viz.sortDir}
-            groupBy={viz.groupBy}
             search={viz.search}
             onSelect={actions.selectNode}
             onOpen={actions.focusPath}
             onSortChange={actions.setSort}
-            onGroupChange={actions.setGroupBy}
             onSearchChange={actions.setSearch}
             onContextMenu={openMenu}
             className="absolute inset-0 bg-surface"

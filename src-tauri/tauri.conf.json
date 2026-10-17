@@ -5,7 +5,7 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run frontend:dev",
     "beforeBuildCommand": "npm run build"
   },
   "app": {
@@ -38,7 +38,7 @@
     ],
     "category": "Utility",
     "shortDescription": "Local-first disk space analyzer",
-    "longDescription": "Diskora analyzes local disk usage with sunburst, treemap and file-list views, large-file search and content-based duplicate detection. It does not delete files.",
+    "longDescription": "Diskora analyzes local disk usage with sunburst, treemap and file-list views, large-file search and content-based duplicate detection. Diskora Pro adds guarded moves to the Windows Recycle Bin.",
     "publisher": "Diskora",
     "copyright": "",
     "icon": [

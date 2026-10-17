@@ -29,6 +29,7 @@ import type {
   DuplicateOptions,
   DuplicateProgress,
   DuplicateReport,
+  DuplicateVerifyResult,
   FileDetails,
   LargeFilePage,
   LargeFileQuery,
@@ -57,7 +58,6 @@ export type Route =
   | 'privacy';
 
 export type ViewMode = 'sunburst' | 'treemap' | 'list';
-export type GroupBy = 'none' | 'type' | 'folder';
 export type SortDirection = 'asc' | 'desc';
 export type SortKey = 'size' | 'name' | 'modified' | 'count';
 
@@ -73,7 +73,7 @@ export interface Toast {
 export interface AppState {
   ready: boolean;
   route: Route;
-  transportKind: BackendTransport['kind'];
+  transportKind: BackendTransport['kind'] | null;
   canMutate: boolean;
   appVersion: AppVersion | null;
 
@@ -104,7 +104,6 @@ export interface AppState {
     selectedPath: string | null;
     sort: SortKey;
     sortDir: SortDirection;
-    groupBy: GroupBy;
     search: string;
     /** Directory shown in the file list. */
     listPath: string | null;
@@ -122,6 +121,8 @@ export interface AppState {
     report: DuplicateReport | null;
     progress: DuplicateProgress | null;
     loading: boolean;
+    cancelling: boolean;
+    currentReportId: string | null;
     error: string | null;
     selectedPaths: string[];
     excludePaths: string[];
@@ -154,7 +155,7 @@ export interface AppState {
 const initialState: AppState = {
   ready: false,
   route: 'home',
-  transportKind: 'demo',
+  transportKind: null,
   canMutate: false,
   appVersion: null,
   drives: [],
@@ -180,7 +181,6 @@ const initialState: AppState = {
     selectedPath: null,
     sort: 'size',
     sortDir: 'desc',
-    groupBy: 'none',
     search: '',
     listPath: null,
   },
@@ -190,6 +190,8 @@ const initialState: AppState = {
     report: null,
     progress: null,
     loading: false,
+    cancelling: false,
+    currentReportId: null,
     error: null,
     selectedPaths: [],
     excludePaths: [],
@@ -223,7 +225,6 @@ type Action =
   | { type: 'viz-focus'; path: string | null }
   | { type: 'viz-select'; path: string | null }
   | { type: 'viz-sort'; sort: SortKey; dir: SortDirection }
-  | { type: 'viz-group'; groupBy: GroupBy }
   | { type: 'viz-search'; search: string }
   | { type: 'viz-list-path'; path: string | null }
   | { type: 'large-files-query'; query: LargeFileQuery }
@@ -232,6 +233,8 @@ type Action =
   | { type: 'large-files-error'; message: string }
   | { type: 'duplicates-options'; options: DuplicateOptions }
   | { type: 'duplicates-loading' }
+  | { type: 'duplicates-started'; reportId: string }
+  | { type: 'duplicates-cancelling' }
   | { type: 'duplicates-progress'; progress: DuplicateProgress }
   | { type: 'duplicates-report'; report: DuplicateReport }
   | { type: 'duplicates-error'; message: string }
@@ -325,8 +328,6 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, viz: { ...state.viz, selectedPath: action.path } };
     case 'viz-sort':
       return { ...state, viz: { ...state.viz, sort: action.sort, sortDir: action.dir } };
-    case 'viz-group':
-      return { ...state, viz: { ...state.viz, groupBy: action.groupBy } };
     case 'viz-search':
       return { ...state, viz: { ...state.viz, search: action.search } };
     case 'viz-list-path':
@@ -342,13 +343,41 @@ function reducer(state: AppState, action: Action): AppState {
     case 'duplicates-options':
       return { ...state, duplicates: { ...state.duplicates, options: action.options, error: null } };
     case 'duplicates-loading':
-      return { ...state, duplicates: { ...state.duplicates, loading: true, error: null, report: null } };
+      return {
+        ...state,
+        duplicates: {
+          ...state.duplicates,
+          loading: true,
+          cancelling: false,
+          currentReportId: null,
+          error: null,
+          report: null,
+          progress: null,
+        },
+      };
+    case 'duplicates-started':
+      return { ...state, duplicates: { ...state.duplicates, currentReportId: action.reportId } };
+    case 'duplicates-cancelling':
+      return { ...state, duplicates: { ...state.duplicates, cancelling: true } };
     case 'duplicates-progress':
       return { ...state, duplicates: { ...state.duplicates, progress: action.progress } };
     case 'duplicates-report':
-      return { ...state, duplicates: { ...state.duplicates, loading: false, report: action.report, progress: null } };
+      return {
+        ...state,
+        duplicates: {
+          ...state.duplicates,
+          loading: false,
+          cancelling: false,
+          currentReportId: null,
+          report: action.report,
+          progress: null,
+        },
+      };
     case 'duplicates-error':
-      return { ...state, duplicates: { ...state.duplicates, loading: false, error: action.message } };
+      return {
+        ...state,
+        duplicates: { ...state.duplicates, loading: false, cancelling: false, currentReportId: null, error: action.message },
+      };
     case 'duplicates-toggle-path': {
       const selected = state.duplicates.selectedPaths.includes(action.path)
         ? state.duplicates.selectedPaths.filter((p) => p !== action.path)
@@ -423,7 +452,6 @@ export interface AppActions {
   focusPath(path: string | null): void;
   selectNode(path: string | null): void;
   setSort(sort: SortKey, dir?: SortDirection): void;
-  setGroupBy(groupBy: GroupBy): void;
   setSearch(search: string): void;
   openListPath(path: string): void;
   runLargeFileQuery(patch?: Partial<LargeFileQuery>): Promise<void>;
@@ -432,6 +460,8 @@ export interface AppActions {
   open(path: string): Promise<void>;
   copyPath(path: string): Promise<void>;
   runDuplicateScan(patch?: Partial<DuplicateOptions>): Promise<void>;
+  cancelDuplicateScan(): Promise<void>;
+  verifyDuplicateFiles(pathA: string, pathB: string): Promise<DuplicateVerifyResult>;
   toggleDuplicatePath(path: string): void;
   clearDuplicateSelection(): void;
   excludeDuplicatePath(path: string): void;
@@ -659,7 +689,6 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
               ? 'asc'
               : 'desc'),
         }),
-      setGroupBy: (groupBy) => dispatch({ type: 'viz-group', groupBy }),
       setSearch: (search) => dispatch({ type: 'viz-search', search }),
       openListPath: (path) => dispatch({ type: 'viz-list-path', path }),
 
@@ -754,6 +783,7 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
         dispatch({ type: 'duplicates-loading' });
         try {
           const reportId = await requireTransport().findDuplicates(options);
+          dispatch({ type: 'duplicates-started', reportId });
           const transport = requireTransport();
           const poll = async () => {
             const report = await transport.duplicatesGet(reportId);
@@ -773,6 +803,19 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
             }), 250);
           };
           await poll();
+        } catch (error) {
+          dispatch({ type: 'duplicates-error', message: describe(error) });
+        }
+      },
+
+      verifyDuplicateFiles: (pathA, pathB) => requireTransport().verifyDuplicates(pathA, pathB),
+
+      cancelDuplicateScan: async () => {
+        const reportId = stateRef.current.duplicates.currentReportId;
+        if (!reportId || stateRef.current.duplicates.cancelling) return;
+        dispatch({ type: 'duplicates-cancelling' });
+        try {
+          await requireTransport().cancelDuplicates(reportId);
         } catch (error) {
           dispatch({ type: 'duplicates-error', message: describe(error) });
         }
@@ -956,10 +999,11 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
 
   // Poll results as well as receiving progress. Very short scans can finish before
   // scanStart's IPC response arrives; relying solely on a final event loses that race.
+  const scanIsRunning = state.scan.scanning;
+  const activeScanId = state.scan.activeScanId;
   useEffect(() => {
-    const { scanning, activeScanId } = state.scan;
     const transport = transportRef.current;
-    if (!scanning || !activeScanId || !transport) return;
+    if (!scanIsRunning || !activeScanId || !transport) return;
     let cancelled = false;
     let busy = false;
     const poll = async () => {
@@ -978,7 +1022,7 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
     void poll();
     const timer = window.setInterval(() => void poll(), 250);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [state.scan.scanning, state.scan.activeScanId]);
+  }, [scanIsRunning, activeScanId]);
 
   const value = useMemo<AppContextValue>(
     () => ({ state, actions, transport: transportRef.current }),

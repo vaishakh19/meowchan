@@ -11,18 +11,16 @@ subscription) adds safe file deletion through the Windows Recycle Bin and full
 absolute path display with copy. See the [Pro page](PRO-SETUP.md) for merchant
 setup and purchase testing.
 
-## Run the verified Windows build
+## Current build status
 
-The delivered ZIP includes source and the tested Windows x64 build. On Windows
-10/11, open **`release/Diskora-setup.exe`** and then launch **Diskora** from the
-Start menu. No development tools are needed to run it. Alternatively, launch
-`release/Diskora.exe` directly if WebView2 is already installed.
+This branch contains source changes that have not yet been rebuilt or smoke-tested
+on Windows. The checked-in `release/` files were inherited from the base revision;
+they are not evidence that this branch's source builds. Do not distribute them as
+a build of this revision until Windows CI has rebuilt the installer and refreshed
+`release/SHA256SUMS.txt`. See [VERIFICATION.md](VERIFICATION.md) for exact checks
+and remaining platform-specific validation.
 
-These binaries are **unsigned**; Windows may show an unknown-publisher/SmartScreen
-warning. Check the download's origin before choosing to run it. See
-`release/SHA256SUMS.txt` for the delivered file hashes.
-
-## Build on Windows x64
+## Build and run on Windows x64
 
 Install only:
 
@@ -45,11 +43,17 @@ The single build command is **`npm run app:build`** after dependency installatio
 It typechecks/builds React, compiles Rust for Windows x64, and creates one NSIS
 installer. Internet access is needed for initial dependency/tool downloads.
 
+For development on Windows, **`npm run dev`** starts Tauri and Vite with hot reload.
+The plain frontend server is available as `npm run frontend:dev`; it is not a disk
+scanner and deliberately shows **“Run inside the desktop app”** in a normal browser.
+`npm run smoke` exercises the packaged Windows executable and is Windows-only.
+
 Output:
 
 ```text
 release/Diskora-setup.exe   Recommended distribution: current-user installer
 release/Diskora.exe         Raw application executable
+release/SHA256SUMS.txt      SHA-256 checksums for the two binaries
 ```
 
 No Node.js, Rust, SDK, source directory, or dev server is needed to run the result.
@@ -67,35 +71,55 @@ are configured separately in `src-tauri/tauri.conf.json`. The legacy identifier
 so existing preferences and scan summaries remain accessible. No old tables are
 dropped.
 
+## Code signing and SmartScreen
+
+The distributed executable and installer are unsigned unless a release operator
+adds optional Windows code signing. Windows may show SmartScreen or publisher
+warnings for unsigned or newly signed builds; this is expected and is not a
+substitute for verifying the download. Check the SHA-256 values in
+`release/SHA256SUMS.txt` against the binaries. A production signing certificate
+and its private key must be stored only in the release system's protected secret
+store, never committed to this repository. Signing is not configured in this
+source branch.
+
 ## Use
 
 Launch Diskora, choose **Scan Drive** or **Scan a folder…**, then explore the
-results. Duplicate search requires a completed scan and reads file contents for
-hashing. The UI defaults to a 1 MiB minimum (adjustable down to 1 KiB); files
-over 5 GiB are skipped to bound hashing work. It never removes copies. Scanning is cancellable. Inaccessible or
-vanished entries produce a partial result with reported errors, not invented
-sizes. Logical sizes can differ from volume usage because of permissions,
+results. Duplicate search requires a completed scan: it groups by exact size,
+checks a bounded prefix/suffix SHA-256 sample, then streams a full SHA-256 only
+for sample collisions. The UI defaults to a 1 MiB minimum (adjustable down to
+1 KiB); files over 5 GiB are not hashed and are counted in the report. Duplicate
+scans can be cancelled. They never remove copies. Scanning is also cancellable.
+Inaccessible or vanished entries produce a partial result with typed errors, not
+invented sizes. Logical sizes can differ from volume usage because of permissions,
 hard links, filesystem metadata, compression, sparse files and concurrent changes.
+Opening the frontend in a normal browser displays **“Run inside the desktop app”**;
+there is no synthetic filesystem or demo scan data.
 
 **Deleting files (Pro):** select items and choose **Delete**. Diskora confirms
-the exact name, path, size and type of every item first, then moves it to the
-Windows Recycle Bin through the shell — always recoverable, never permanent,
-never following links or junctions, never touching drive roots, the scanned
-folder itself, or protected system locations. A failed item is reported per
-item; the scan results refresh immediately.
+the exact name, path, size and type of every item first, then requests a move to
+the Windows Recycle Bin through the shell. It never calls a permanent-delete API
+or falls back to permanent removal; if a path fails a safety check or Windows
+refuses the Recycle Bin operation, that item is reported as failed. Links,
+junctions, drive roots, the scanned folder itself and protected system locations
+are refused. The scan index refreshes after successful moves.
 
 **Paths (Pro):** the details panel shows the full absolute path of the selected
 item, with **Copy path**. Without Pro, paths are shown masked in the middle.
 
-**Diskora Pro** is verified against Dodo Payments on every activation, restore
-and deletion — a licence is a server-checked purchase, not a local flag.
-Purchases can be restored after a reinstall. Network use is limited to these
-licence checks; everything else stays on your machine.
+**Diskora Pro** is verified against Dodo Payments on activation, restore and
+before deletion. Deletion requires a fresh successful validation; offline grace
+never authorizes a destructive action. The entitlement is encrypted with
+user-scoped Windows DPAPI before it is stored in SQLite. Network use is limited
+to the allowlisted Dodo licensing endpoints; everything else stays on your machine.
 
 Scan trees are pruned for display; the file list pages through the underlying
 index. A scan defaults to a one-million-entry safety limit and reports truncation
-when reached. Only summary totals are saved; a restart requires a rescan to
-navigate files. History contains the most recent 50 summaries in its UI.
+when reached. New scans persist only summary metadata and aggregate totals; the
+per-file index and full trees are not written. A restart requires a rescan to
+navigate files. History retains up to the most recent 50 summaries. For safety,
+legacy `scan_snapshots` rows from older versions are left untouched but the
+current app no longer reads or writes that table.
 
 ## Verification
 
@@ -111,8 +135,10 @@ files, real IPC/scanning/hashing and the rendered WebView2 UI. Only the OS folde
 picker's answer is replaced during the test. It is never replaced in the shipped
 application. Browser opening is deliberately rejected, not filled with demo data.
 
-**Release status:** see `VERIFICATION.md` for tests actually completed and remaining
-limitations. Do not treat configured CI steps as proof they have passed. Installer
-installation/uninstallation passed on Windows Server 2022 CI. A clean Windows
-10/11 machine without WebView2, interactive accessibility/DPI checks, and
-signing/SmartScreen reputation still require separate release validation.
+**Current validation status:** see `VERIFICATION.md` for the exact checks actually
+completed on this branch. The Windows workflow is configured to run native tests,
+build the raw executable and current-user NSIS installer, inspect runtime imports,
+and smoke-test/install/uninstall the app; configuration is not evidence those steps
+have passed. No Windows 10/11 desktop run or real Recycle Bin operation has been
+verified for this branch. A clean PC, WebView2 installation, accessibility/DPI
+checks, and signing/SmartScreen reputation remain release-validation tasks.

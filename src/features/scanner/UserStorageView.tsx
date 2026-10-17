@@ -5,7 +5,7 @@
  * Accurately aggregates document folders, AppData/caches, downloads, and developer environments.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Download, Folder, RefreshCw, User, Users } from 'lucide-react';
 import { useApp } from '@/app/state';
 import { Button, EmptyState, Panel, SectionTitle, Spinner } from '@/components/ui/primitives';
@@ -23,7 +23,7 @@ export function UserStorageView({ onClose }: { onClose?: () => void }): React.JS
 
   const scanId = scan.result?.scanId;
 
-  const loadReport = async () => {
+  const loadReport = useCallback(async () => {
     if (!scanId) return;
     setLoading(true);
     setError(null);
@@ -36,11 +36,11 @@ export function UserStorageView({ onClose }: { onClose?: () => void }): React.JS
     } finally {
       setLoading(false);
     }
-  };
+  }, [scanId]);
 
   useEffect(() => {
     void loadReport();
-  }, [scanId]);
+  }, [loadReport]);
 
   const handleExportCsv = async () => {
     if (!scanId) return;

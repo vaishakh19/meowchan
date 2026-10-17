@@ -33,11 +33,12 @@ $env:DISKORA_DODO_ENVIRONMENT  = "live"      # or "test"
 npm run app:build
 ```
 
-Without both required variables the build compiles, but Diskora Pro
-shows an explicit "purchases are not configured on this build" notice
-instead of a fake checkout, and deletion stays locked. The checkout URL
-is opened in the customer's default browser by the native shell
-(`ShellExecuteW`); the webview itself has no network permission.
+Without both required variables, or when either URL is outside the allowlist,
+the build compiles but Diskora Pro shows an explicit not-configured notice and
+delete stays locked. The API base must be exactly the matching Dodo host
+(`live.dodopayments.com` or `test.dodopayments.com`). Checkout links must use
+`checkout.dodopayments.com` or `test.checkout.dodopayments.com` over HTTPS. The
+checkout URL is opened by the native shell; the webview has no network permission.
 
 ## 3. Test purchases before going live
 
@@ -51,12 +52,12 @@ method:
 3. Paste the key into the Pro page's **Activate** box. The app calls
    Dodo's public activate endpoint, checks the response belongs to the
    configured product, and persists the entitlement locally.
-4. Confirm deletion and full paths unlock, then restart the app — the
-   entitlement is re-validated on the Pro page and before every
-   deletion.
+4. Confirm full paths unlock, then restart the app — the entitlement is
+   re-validated on the Pro page and before every deletion.
 5. Test **Restore purchases** and the offline behaviour (disable
-   networking: a previously verified purchase keeps Pro for 7 days,
-   clearly labelled as offline).
+   networking: a previously verified purchase is shown as active for up
+   to 7 days, clearly labelled as offline; deletion remains disabled
+   until Dodo Payments can verify the purchase again).
 
 ## 4. How verification works (and why no backend is needed)
 
@@ -74,11 +75,15 @@ method:
   cannot unlock Diskora Pro.
 - **Persistence** — the entitlement (key, instance id, product id,
   timestamps) is stored in the app's local SQLite database
-  (`pro_entitlement` table). It is an input to the next verification,
-  never proof by itself.
+  (`pro_entitlement` table). Windows user-scoped DPAPI encrypts the whole
+  entitlement before it reaches SQLite. Older plaintext rows are migrated
+  to DPAPI on first read. The stored value is an input to the next
+  verification, never proof by itself.
 - **Grace period** — if Dodo is unreachable, a purchase verified within
-  the last 7 days keeps Pro active, labelled "offline". After 7 days
-  offline, Pro locks until a connection returns.
+  the last 7 days is shown as active, labelled "offline". After 7 days
+  offline, Pro locks until a connection returns. Destructive deletion
+  always requires a successful fresh Dodo validation; offline grace
+  never authorizes it.
 
 Because activation/validation are public endpoints, the smallest secure
 integration is direct Rust → Dodo HTTPS. A separate licensing backend
@@ -93,9 +98,10 @@ operations stay in the Dodo dashboard.
   app's "paste your key" activation is therefore the primary flow;
   a static payment link cannot hand a key to a desktop app
   automatically.
-- Refunds/revocations take effect on the next validation (startup,
-  Pro page, restore, or any deletion attempt — deletion always
-  re-validates first).
+- Refunds/revocations take effect on the next successful server
+  validation: opening the Pro page, Restore purchases, or a deletion
+  attempt (deletion always re-validates first). App startup reads the
+  cached entitlement and does not contact Dodo Payments.
 - To change the price or product, create the new product in the
   dashboard and rebuild with the new `DISKORA_DODO_PRODUCT_ID` and
   `DISKORA_DODO_CHECKOUT_URL`.

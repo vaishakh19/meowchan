@@ -125,13 +125,13 @@ export interface ScanOptions {
    * Kept as a safety valve for pathological trees.
    */
   maxDepth?: number;
-  /** Follow symbolic links / junction points. Defaults to `false` (recommended). */
+  /** Retained for wire compatibility; Diskora never follows symbolic links or reparse points. */
   followLinks?: boolean;
   /** Include hidden entries. Defaults to `true`. */
   includeHidden?: boolean;
   /** Include entries flagged SYSTEM by the OS. Defaults to `true`. */
   includeSystem?: boolean;
-  /** Hard cap on the number of entries visited. `0` means unlimited. */
+  /** Hard cap on the number of entries visited, including the root. `0` uses the safe default. */
   maxEntries?: number;
   /**
    * Number of children kept per folder in the tree sent to the UI. Deeper children are
@@ -147,6 +147,8 @@ export interface ScanProgress {
   scanId: string;
   phase: ScanPhase;
   status: ScanStatus;
+  /** Entries reserved against the hard scan limit, including the root. */
+  entriesScanned: number;
   filesScanned: number;
   foldersScanned: number;
   bytesAnalyzed: number;
@@ -236,6 +238,18 @@ export interface ScanResult {
   expectedBytes: number | null;
 }
 
+export type FileListSort = 'name' | 'size' | 'count' | 'modified';
+
+export interface ChildrenQuery {
+  scanId: string;
+  path: string;
+  offset: number;
+  limit: number;
+  sort: FileListSort;
+  sortDir: 'asc' | 'desc';
+  search: string;
+}
+
 export interface ChildrenPage {
   path: string;
   offset: number;
@@ -299,8 +313,8 @@ export interface DuplicateOptions {
   maxBytes?: number;
   /** Optional path prefixes that must not be considered. */
   excludePaths?: string[];
-  /** Hash algorithm. `blake3` is fastest; `sha256` is the conservative default. */
-  algorithm?: 'sha256' | 'blake3';
+  /** SHA-256 is the only supported algorithm; filenames are never used as evidence. */
+  algorithm?: 'sha256';
   /** Restrict to these lower-case extensions. Empty = all. */
   extensions?: string[];
 }
@@ -310,8 +324,6 @@ export interface DuplicateFile {
   name: string;
   sizeBytes: number;
   modifiedAt: number | null;
-  /** `true` when a byte-for-byte comparison confirmed the match (not just the hash). */
-  byteVerified: boolean;
   /** Index of the copy the app suggests keeping (oldest, then shallowest path). */
   isSuggestedOriginal: boolean;
 }
@@ -323,8 +335,6 @@ export interface DuplicateGroup {
   reclaimableBytes: number;
   copies: DuplicateFile[];
   hash: string;
-  /** `size` groups confirmed by hash only, `verified` groups also byte-compared. */
-  confidence: 'hash' | 'verified';
 }
 
 export interface DuplicateReport {
@@ -333,13 +343,18 @@ export interface DuplicateReport {
   startedAt: number;
   finishedAt: number | null;
   status: ScanStatus;
-  algorithm: 'sha256' | 'blake3';
+  algorithm: 'sha256';
   groups: DuplicateGroup[];
+  /** Distinct size buckets that reached the partial-hash stage. */
+  candidateGroups: number;
   totalGroups: number;
   totalCopies: number;
   totalReclaimableBytes: number;
   hashedBytes: number;
   filesHashed: number;
+  /** Files excluded because their logical size is greater than the hard 5 GiB cap. */
+  skippedLargeFiles: number;
+  skippedLargeBytes: number;
   errors: ScanErrorInfo[];
 }
 
@@ -523,7 +538,7 @@ export interface DuplicateProgressEvent {
 
 export interface DuplicateProgress {
   reportId: string;
-  phase: 'grouping' | 'hashing' | 'verifying' | 'finalizing' | 'done' | 'error';
+  phase: 'grouping' | 'partial-hashing' | 'hashing' | 'verifying' | 'finalizing' | 'done' | 'cancelled' | 'error';
   filesHashed: number;
   bytesHashed: number;
   candidateGroups: number;

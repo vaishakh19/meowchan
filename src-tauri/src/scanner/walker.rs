@@ -1,12 +1,11 @@
 //! The directory walker.
 //!
-//! A bounded pool of workers pulls directories off a shared queue. Each worker reads one directory,
-//! records its files, and pushes its sub-directories back onto the queue. That gives breadth-first
-//! traversal (so progress and ETA are meaningful early) with bounded concurrency (so a huge tree
-//! cannot exhaust handles or memory).
+//! A bounded pool of workers pulls directories from a shared LIFO worklist. Each worker reads one
+//! directory, records its files, and pushes sub-directories back onto the worklist. Concurrency is
+//! bounded so a huge tree cannot exhaust handles or memory.
 //!
 //! Safety rules enforced here:
-//!   - `symlink_metadata` is used, so links are never followed unless the caller opts in,
+//!   - `symlink_metadata` and component checks are used; links and reparse points are never followed,
 //!   - a directory is only ever queued once: the visited set is keyed on the canonical path,
 //!   - permission denials, missing paths, long paths and vanished files are recorded, not guessed,
 //!   - cancellation is checked on every entry, so cancelling stops within one directory read.
@@ -15,6 +14,12 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
+
+pub const DEFAULT_MAX_ENTRIES: u64 = 1_000_000;
+
+pub fn effective_max_entries(requested: u64) -> u64 {
+    if requested == 0 { DEFAULT_MAX_ENTRIES } else { requested.min(DEFAULT_MAX_ENTRIES) }
+}
 
 use serde::{Deserialize, Serialize};
 
@@ -29,10 +34,11 @@ pub struct ScanOptions {
     pub root_path: String,
     /// `0` = unlimited.
     pub max_depth: u32,
+    /// Retained for wire compatibility. Diskora never follows links or reparse points.
     pub follow_links: bool,
     pub include_hidden: bool,
     pub include_system: bool,
-    /// `0` = unlimited.
+    /// Hard cap on all entries including the scan root. `0` requests the hard default (1,000,000).
     pub max_entries: u64,
     pub max_children_per_node: u32,
     pub compute_hashes: bool,
@@ -46,7 +52,7 @@ impl Default for ScanOptions {
             follow_links: false,
             include_hidden: true,
             include_system: true,
-            max_entries: 1_000_000,
+            max_entries: DEFAULT_MAX_ENTRIES,
             max_children_per_node: 100,
             compute_hashes: false,
         }
@@ -85,7 +91,7 @@ pub struct ScanRun {
     /// Directory table. Index 0 is always the root.
     pub directories: Vec<DirectoryRecord>,
     pub errors: Vec<WalkError>,
-    /// True when a safety cap (entry limit, cancellation) stopped the walk early.
+    /// True when the hard entry limit stopped the walk early. Cancellation is reported separately.
     pub hit_limit: bool,
     pub cancelled: bool,
     pub elapsed_ms: u64,
@@ -173,9 +179,32 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
     let root = PathBuf::from(&options.root_path);
     let mut run = ScanRun::default();
 
+    // Inspect path components from the volume root downward so a scan root nested below a
+    // junction/symlink is rejected before any directory is enumerated.
+    if let Err(error) = crate::filesystem::entries::ensure_no_reparse_components(&root) {
+        run.errors.push(WalkError {
+            path: options.root_path.clone(),
+            kind: error_kind(&error),
+            message: error.to_string(),
+        });
+        return run;
+    }
+
     // Root metadata. A missing or non-directory root is an honest error, not an empty scan.
     match read_metadata(&root, 0) {
-        Ok(meta) if meta.kind == Kind::Folder => {
+        Ok(meta) if meta.kind == Kind::Folder && !meta.is_reparse_point => {
+            // The root itself counts against the same hard entry limit as its descendants.
+            if !counters.reserve_entry(options.max_entries) {
+                counters.mark_limit_reached();
+                counters.add_error();
+                run.errors.push(WalkError {
+                    path: options.root_path.clone(),
+                    kind: "limit-exceeded".to_string(),
+                    message: format!("Stopped after at most {} entries.", effective_max_entries(options.max_entries)),
+                });
+                run.hit_limit = true;
+                return run;
+            }
             run.directories.push(DirectoryRecord {
                 path: root.clone(),
                 name: volume_name(&root),
@@ -188,13 +217,16 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
                 access_denied: false,
             });
         }
-        Ok(_) => {
+        Ok(meta) => {
             run.errors.push(WalkError {
                 path: options.root_path.clone(),
-                kind: "not-found".to_string(),
-                message: "The scan root is not a directory.".to_string(),
+                kind: if meta.is_reparse_point { "other" } else { "not-found" }.to_string(),
+                message: if meta.is_reparse_point {
+                    "The scan root is a symbolic link or reparse point. Diskora will not follow it.".to_string()
+                } else {
+                    "The scan root is not a directory.".to_string()
+                },
             });
-            run.hit_limit = true;
             return run;
         }
         Err(error) => {
@@ -203,7 +235,6 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
                 kind: error_kind(&error),
                 message: error.to_string(),
             });
-            run.hit_limit = true;
             return run;
         }
     }
@@ -225,7 +256,7 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
 
         handles.push(std::thread::spawn(move || {
             while let Some((dir, depth)) = queue.pop() {
-                if counters.is_cancelled() {
+                if counters.is_cancelled() || counters.is_limit_reached() {
                     queue.finish();
                     queue.complete();
                     break;
@@ -235,14 +266,37 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
                     continue;
                 }
                 counters.set_current_path(&dir.to_string_lossy());
-                scan_directory(&dir, depth, &options, &counters, &queue, &visited, &output);
+                let worker = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    scan_directory(&dir, depth, &options, &counters, &queue, &visited, &output)
+                }));
+                if worker.is_err() {
+                    counters.add_error();
+                    record(&output, |out| {
+                        out.errors.push(WalkError {
+                            path: dir.to_string_lossy().to_string(),
+                            kind: "worker-panic".to_string(),
+                            message: "A scanner worker failed unexpectedly; remaining work was stopped.".to_string(),
+                        });
+                    });
+                    queue.finish();
+                }
                 queue.complete();
             }
         }));
     }
 
     for handle in handles {
-        let _ = handle.join();
+        if handle.join().is_err() {
+            counters.add_error();
+            record(&output, |out| {
+                out.errors.push(WalkError {
+                    path: options.root_path.clone(),
+                    kind: "worker-panic".to_string(),
+                    message: "A scanner worker terminated unexpectedly.".to_string(),
+                });
+            });
+            queue.finish();
+        }
     }
     queue.finish();
 
@@ -267,7 +321,7 @@ pub fn walk(options: &ScanOptions, counters: &Arc<ProgressCounters>) -> ScanRun 
     }
 
     run.cancelled = counters.is_cancelled();
-    run.hit_limit = run.cancelled || run.errors.iter().any(|error| error.kind == "limit-exceeded");
+    run.hit_limit = counters.is_limit_reached() || run.errors.iter().any(|error| error.kind == "limit-exceeded");
     run.elapsed_ms = started.elapsed().as_millis() as u64;
     run
 }
@@ -282,6 +336,18 @@ fn scan_directory(
     visited: &Mutex<HashSet<PathBuf>>,
     output: &Mutex<WorkOutput>,
 ) {
+    if let Err(error) = crate::filesystem::entries::ensure_no_reparse_components(dir) {
+        counters.add_error();
+        record(output, |out| {
+            out.errors.push(WalkError {
+                path: dir.to_string_lossy().to_string(),
+                kind: error_kind(&error),
+                message: error.to_string(),
+            });
+            out.denied.push(dir.to_path_buf());
+        });
+        return;
+    }
     let long_path = crate::filesystem::long_path::to_unc_long_path(dir);
     let entries = match std::fs::read_dir(&long_path) {
         Ok(entries) => entries,
@@ -306,15 +372,18 @@ fn scan_directory(
         if counters.is_cancelled() {
             return;
         }
-        if options.max_entries > 0 && (counters.files() + counters.folders()) >= options.max_entries {
-            counters.add_error();
-            record(output, |out| {
-                out.errors.push(WalkError {
-                    path: dir.to_string_lossy().to_string(),
-                    kind: "limit-exceeded".to_string(),
-                    message: format!("Stopped after {} entries.", options.max_entries),
+        if counters.is_limit_reached() || !counters.reserve_entry(options.max_entries) {
+            if counters.mark_limit_reached() {
+                counters.add_error();
+                record(output, |out| {
+                    out.errors.push(WalkError {
+                        path: dir.to_string_lossy().to_string(),
+                        kind: "limit-exceeded".to_string(),
+                        message: format!("Stopped after at most {} entries.", effective_max_entries(options.max_entries)),
+                    });
                 });
-            });
+            }
+            queue.finish();
             return;
         }
 
@@ -354,7 +423,7 @@ fn scan_directory(
             continue;
         }
 
-        let is_link = meta.is_symlink || meta.is_junction;
+        let is_link = meta.is_reparse_point;
 
         match meta.kind {
             Kind::File => {
@@ -367,7 +436,6 @@ fn scan_directory(
                         disk_size: meta.disk_size,
                         modified_at: meta.modified_at,
                         extension: meta.extension.clone(),
-                        parent_path: dir.to_path_buf(),
                         depth: meta.depth,
                         is_symlink: meta.is_symlink,
                         is_junction: meta.is_junction,
@@ -379,10 +447,9 @@ fn scan_directory(
             Kind::Folder => {
                 counters.add_folder();
 
-                // Links and junctions are recorded in the directory table so the UI shows them,
-                // but we never traverse them unless the caller explicitly opted in.
-                // This prevents recursive loops and double counting.
-                if is_link && !options.follow_links {
+                // Every reparse point is represented as a zero-size entry and never traversed.
+                // The IPC option is intentionally ignored: following links is not supported.
+                if is_link {
                     record(output, |out| {
                         out.directories.push(DirectoryRecord {
                             path: path.clone(),
@@ -405,6 +472,7 @@ fn scan_directory(
                     Err(_) => false,
                 };
                 if !fresh {
+                    counters.add_error();
                     record(output, |out| {
                         out.errors.push(WalkError {
                             path: path.to_string_lossy().to_string(),
@@ -516,8 +584,8 @@ mod tests {
     #[test]
     fn walks_a_small_tree_and_counts_everything() {
         let root = temp_dir("basic");
-        fs::create_dir_all(root.join("a\\b")).unwrap();
-        fs::write(root.join("a\\b\\deep.bin"), vec![0u8; 2048]).unwrap();
+        fs::create_dir_all(root.join("a").join("b")).unwrap();
+        fs::write(root.join("a").join("b").join("deep.bin"), vec![0u8; 2048]).unwrap();
         fs::write(root.join("top.txt"), vec![0u8; 512]).unwrap();
 
         let options = ScanOptions {
@@ -541,22 +609,23 @@ mod tests {
 
     #[test]
     fn reports_a_missing_root_as_an_error() {
+        let missing_root = std::env::temp_dir().join(format!("diskwise-missing-{}", std::process::id()));
         let options = ScanOptions {
-            root_path: "Z:\\definitely-not-here\\nope".to_string(),
+            root_path: missing_root.to_string_lossy().to_string(),
             ..Default::default()
         };
         let counters = Arc::new(ProgressCounters::new());
         let run = walk(&options, &counters);
         assert!(run.files.is_empty());
         assert!(!run.errors.is_empty());
-        assert!(run.hit_limit);
+        assert!(!run.hit_limit);
     }
 
     #[test]
     fn honours_max_depth() {
         let root = temp_dir("depth");
-        fs::create_dir_all(root.join("a\\b\\c")).unwrap();
-        fs::write(root.join("a\\b\\c\\deep.bin"), vec![0u8; 16]).unwrap();
+        fs::create_dir_all(root.join("a").join("b").join("c")).unwrap();
+        fs::write(root.join("a").join("b").join("c").join("deep.bin"), vec![0u8; 16]).unwrap();
 
         let options = ScanOptions {
             root_path: root.to_string_lossy().to_string(),
@@ -583,9 +652,35 @@ mod tests {
         };
         let counters = Arc::new(ProgressCounters::new());
         let run = walk(&options, &counters);
-        assert!(run.files.len() <= 11, "the cap is approximate by one entry");
+        assert!(run.files.len() + run.directories.len() <= options.max_entries as usize);
+        assert_eq!(counters.entries(), options.max_entries);
+        assert!(run.hit_limit);
         assert!(run.errors.iter().any(|error| error.kind == "limit-exceeded"));
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parallel_workers_never_reserve_beyond_the_global_entry_limit() {
+        let root = temp_dir("parallel-limit");
+        for directory in 0..32 {
+            let child = root.join(format!("dir-{directory}"));
+            fs::create_dir_all(&child).unwrap();
+            for file in 0..16 {
+                fs::write(child.join(format!("file-{file}.bin")), vec![0u8; 8]).unwrap();
+            }
+        }
+        let options = ScanOptions {
+            root_path: root.to_string_lossy().to_string(),
+            max_entries: 40,
+            ..Default::default()
+        };
+        let counters = Arc::new(ProgressCounters::new());
+        let run = walk(&options, &counters);
+        assert_eq!(counters.entries(), options.max_entries);
+        assert!(run.files.len() + run.directories.len() <= options.max_entries as usize);
+        assert_eq!(run.errors.iter().filter(|error| error.kind == "limit-exceeded").count(), 1);
+        assert!(run.hit_limit);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -594,7 +689,7 @@ mod tests {
         let root = temp_dir("cancel");
         fs::create_dir_all(root.join("a")).unwrap();
         for index in 0..20 {
-            fs::write(root.join(format!("a\\f{index}.bin")), vec![0u8; 4]).unwrap();
+            fs::write(root.join("a").join(format!("f{index}.bin")), vec![0u8; 4]).unwrap();
         }
         let counters = Arc::new(ProgressCounters::new());
         counters.cancel();
@@ -610,10 +705,10 @@ mod tests {
     }
 
     #[test]
-    fn every_file_records_its_parent_directory() {
+    fn file_parent_is_derived_without_copying_a_second_path() {
         let root = temp_dir("parent");
         fs::create_dir_all(root.join("sub")).unwrap();
-        fs::write(root.join("sub\\file.bin"), vec![0u8; 32]).unwrap();
+        fs::write(root.join("sub").join("file.bin"), vec![0u8; 32]).unwrap();
         let options = ScanOptions {
             root_path: root.to_string_lossy().to_string(),
             ..Default::default()
@@ -621,7 +716,8 @@ mod tests {
         let counters = Arc::new(ProgressCounters::new());
         let run = walk(&options, &counters);
         assert_eq!(run.files.len(), 1);
-        assert!(run.files[0].parent_path.ends_with("sub"));
+        let expected_parent = root.join("sub");
+        assert_eq!(run.files[0].path.parent(), Some(expected_parent.as_path()));
 
         let _ = fs::remove_dir_all(&root);
     }

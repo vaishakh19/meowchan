@@ -34,6 +34,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); __setTransport(null); });
 
 describe('desktop shell with mocked IPC (not a real filesystem test)', () => {
+  it('shows a desktop-only message in a plain browser instead of inventing scan data', async () => {
+    __setTransport(null);
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Run inside the desktop app' })).toBeDefined();
+    expect(invoke.mock.calls.some(([command]) => command === 'list_drives')).toBe(false);
+  });
+
   it('renders the analyzer with free features intact and an upgrade path', async () => {
     render(<App />);
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('list_drives', undefined));
@@ -96,6 +103,58 @@ it('fetches a completed short scan even when no progress event was received', as
   render(<App />);
   await userEvent.setup().click(screen.getByRole('button', { name: /scan a folder/i }));
   await waitFor(() => expect(screen.getByTestId('analyzed-size').textContent).toMatch(/10\s*B/));
+});
+
+it('offers byte-for-byte verification for every reported duplicate copy', async () => {
+  open.mockResolvedValue('C:\\chosen');
+  const root = {
+    id: 'root', path: 'C:\\chosen', name: 'chosen', kind: 'folder', sizeBytes: 10,
+    diskSizeBytes: null, fileCount: 2, folderCount: 0, modifiedAt: null,
+    createdAt: null, extension: null, category: 'other', accessDenied: false,
+    children: [], synthetic: false,
+  };
+  const scanResult = {
+    scanId: 'scan-verify', rootPath: root.path, rootName: root.name,
+    startedAt: 0, finishedAt: 1, status: 'complete', tree: root, totalBytes: 10,
+    diskTotalBytes: null, fileCount: 2, folderCount: 0, errors: [], truncated: false,
+    prunedNodes: 0, durationMs: 1, expectedBytes: null,
+  };
+  const duplicateReport = {
+    reportId: 'report-verify', scanId: 'scan-verify', startedAt: 0, finishedAt: 1,
+    status: 'complete', algorithm: 'sha256',
+    groups: [{
+      groupId: 'group-1', sizeBytes: 10, reclaimableBytes: 10, hash: 'sha256:match',
+      copies: [
+        { path: 'C:\\chosen\\a.txt', name: 'a.txt', sizeBytes: 10, modifiedAt: 0, isSuggestedOriginal: true },
+        { path: 'C:\\chosen\\b.txt', name: 'b.txt', sizeBytes: 10, modifiedAt: 1, isSuggestedOriginal: false }
+      ],
+    }],
+    candidateGroups: 1, totalGroups: 1, totalCopies: 2, totalReclaimableBytes: 10,
+    hashedBytes: 20, filesHashed: 2, skippedLargeFiles: 0, skippedLargeBytes: 0, errors: [],
+  };
+  const fallback = invoke.getMockImplementation()!;
+  invoke.mockImplementation(async (command: string, args?: { scanId?: string }) => {
+    if (command === 'scan_start') return 'scan-verify';
+    if (command === 'scan_get' && args?.scanId === 'scan-verify') return scanResult;
+    if (command === 'find_duplicates') return 'report-verify';
+    if (command === 'duplicates_get') return duplicateReport;
+    if (command === 'verify_duplicates') return { equal: true, bytesCompared: 10, firstDifferenceOffset: null };
+    return fallback(command, args);
+  });
+
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: /scan a folder/i }));
+  await screen.findByTestId('analyzed-size');
+  await user.click(screen.getByRole('button', { name: /duplicate finder/i }));
+  await user.click(screen.getByRole('button', { name: 'Find duplicates' }));
+  await screen.findByText('2 copies · 10 B each');
+  await user.click(screen.getByRole('button', { name: 'Verify bytes' }));
+
+  expect(await screen.findByText('Every copy was compared byte-for-byte with the suggested original.')).toBeDefined();
+  expect(invoke).toHaveBeenCalledWith('verify_duplicates', {
+    pathA: 'C:\\chosen\\a.txt', pathB: 'C:\\chosen\\b.txt',
+  });
 });
 
 it('disposes a native subscription that finishes registering after unmount', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countNodes, DEFAULT_PRUNE_OPTIONS, isSyntheticPath, otherNodeName, pruneTree, treeDepth, withoutSynthetic } from './tree';
+import { countNodes, DEFAULT_PRUNE_OPTIONS, isSyntheticPath, MAX_TREE_DEPTH, otherNodeName, pruneTree, treeDepth, withoutSynthetic } from './tree';
 import type { TreeNode } from '@/types/contracts';
 import { stablePathId } from '@/lib/id';
 
@@ -198,11 +198,22 @@ describe('pruneTree depth search', () => {
     }
   });
 
+  it('caps pathological depth without recursive traversal', () => {
+    const levels = MAX_TREE_DEPTH + 10_000;
+    let chain = file('C:\\chain\\leaf.bin', 1);
+    for (let level = levels; level >= 0; level -= 1) {
+      chain = folder(`C:\\chain\\level-${level}`, [chain]);
+    }
+
+    const result = pruneTree(chain);
+    expect(treeDepth(result.tree)).toBe(MAX_TREE_DEPTH);
+    expect(countNodes(result.tree)).toBe(MAX_TREE_DEPTH + 1);
+    expect(result.prunedNodes).toBe(countNodes(chain) - (MAX_TREE_DEPTH + 1));
+    expect(result.truncated).toBe(true);
+  });
+
   it('the deepest possible tree still prunes in bounded time', () => {
-    // A regression guard on the linear walk. The binary search does at most log2(depth) builds, so
-    // a 400-deep chain costs about nine builds rather than four hundred. The bound below is loose
-    // enough not to be flaky on a slow machine and tight enough to catch a return to the linear
-    // walk, which took seconds on this shape.
+    // A regression guard on the binary depth search and iterative tree handling.
     const chain = makeChain(400);
     const started = Date.now();
     pruneTree(chain, { maxChildren: 100, maxNodes: 100 });

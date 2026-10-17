@@ -17,6 +17,8 @@ export interface VirtualListProps<T> {
   overscan?: number;
   className?: string;
   onScrollBottom?: () => void;
+  /** Stable identity for a query; appended pages then preserve the current scroll offset. */
+  resetKey?: string | number;
   /** Rendered when there is nothing to show. */
   empty?: ReactNode;
   ariaLabel?: string;
@@ -31,6 +33,7 @@ export function VirtualList<T>({
   overscan = 8,
   className,
   onScrollBottom,
+  resetKey,
   empty,
   ariaLabel,
 }: VirtualListProps<T>): React.JSX.Element {
@@ -46,11 +49,13 @@ export function VirtualList<T>({
     }
   }, [onScrollBottom, rowHeight]);
 
-  // Reset the scroll offset when the data set changes identity.
+  // By default reset when the data changes. Paged lists can provide a stable query key so
+  // appending another page does not jump the user's scroll position back to the top.
+  const resetIdentity = resetKey ?? items;
   useEffect(() => {
     if (containerRef.current) containerRef.current.scrollTop = 0;
     setScrollTop(0);
-  }, [items]);
+  }, [resetIdentity]);
 
   const total = items.length;
   const visibleCount = Math.ceil(height / rowHeight) + overscan * 2;

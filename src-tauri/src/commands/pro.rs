@@ -52,10 +52,8 @@ pub async fn pro_activate(
     licensing::activate(&state, &license_key).await
 }
 
-/// Re-validates the stored purchase. This is the restore-purchases
-/// flow: it works after a reinstall, a new machine profile, or a
-/// corrupted local cache, because Dodo Payments remains the source
-/// of truth.
+/// Re-validates the locally stored purchase. If app data is gone or the user is on another
+/// Windows profile/device, they must paste the emailed license key and activate it again.
 #[tauri::command]
 pub async fn pro_restore(state: State<'_, AppState>) -> AppResult<ProStatus> {
     licensing::restore(&state).await

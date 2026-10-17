@@ -16,7 +16,7 @@ import { FileIcon } from '@/lib/icons';
 import { formatBytes, formatBytesCompact, formatCount, formatDateTime, formatRelativeTime } from '@/lib/format';
 import { parseBytes } from '@/lib/format';
 import { categoryLabel } from '@/lib/categories';
-import type { LargeFileSort } from '@/types/contracts';
+import type { LargeFile, LargeFileSort } from '@/types/contracts';
 
 const MB = 1024 * 1024;
 
@@ -36,6 +36,7 @@ const AGE_PRESETS = [
 
 const ROW_HEIGHT = 34;
 const PAGE = 250;
+const EMPTY_LARGE_FILES: LargeFile[] = [];
 
 export function LargeFilesView(): React.JSX.Element {
   const { state, actions } = useApp();
@@ -70,10 +71,9 @@ export function LargeFilesView(): React.JSX.Element {
       });
     }, 180);
     return () => window.clearTimeout(handle);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [minBytes, extension, ageDays, sort, hasScan]);
+  }, [actions, minBytes, extension, ageDays, sort, hasScan]);
 
-  const items = largeFiles.page?.items ?? [];
+  const items = largeFiles.page?.items ?? EMPTY_LARGE_FILES;
 
   const toggleSelect = (path: string) => {
     setSelectedPaths((prev) =>

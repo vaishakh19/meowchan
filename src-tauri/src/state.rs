@@ -39,6 +39,8 @@ pub struct AppState {
     pub cancelled: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub duplicate_reports: Mutex<HashMap<String, DuplicateReport>>,
     pub duplicate_options: Mutex<HashMap<String, DuplicateOptions>>,
+    /// Cancellation flags for in-flight duplicate reports, keyed by report ID.
+    pub duplicate_cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub settings: Mutex<Option<AppSettings>>,
     /// Default pruning options for the tree sent to the UI.
     pub prune: PruneOptions,
@@ -60,6 +62,7 @@ impl AppState {
             cancelled: Mutex::new(HashMap::new()),
             duplicate_reports: Mutex::new(HashMap::new()),
             duplicate_options: Mutex::new(HashMap::new()),
+            duplicate_cancellations: Mutex::new(HashMap::new()),
             settings: Mutex::new(None),
             prune: PruneOptions::default(),
         }
@@ -91,13 +94,20 @@ pub fn snapshot(
     ProgressSnapshot {
         scan_id: scan_id.to_string(),
         status: match counters.phase() {
-            crate::scanner::progress::ScanPhase::Done => crate::scanner::progress::ScanStatus::Complete,
+            crate::scanner::progress::ScanPhase::Done => {
+                if counters.error_count() > 0 || counters.is_limit_reached() {
+                    crate::scanner::progress::ScanStatus::Partial
+                } else {
+                    crate::scanner::progress::ScanStatus::Complete
+                }
+            }
             crate::scanner::progress::ScanPhase::Cancelled => crate::scanner::progress::ScanStatus::Cancelled,
             crate::scanner::progress::ScanPhase::Error => crate::scanner::progress::ScanStatus::Error,
             _ => crate::scanner::progress::ScanStatus::Running,
         },
-        truncated: counters.is_cancelled(),
+        truncated: counters.is_limit_reached(),
         phase: counters.phase(),
+        entries_scanned: counters.entries(),
         files_scanned: counters.files(),
         folders_scanned: counters.folders(),
         bytes_analyzed: counters.bytes(),
@@ -119,7 +129,7 @@ pub fn entry_from_run(
     expected_bytes: Option<u64>,
 ) -> ScanEntry {
     let finished_at = crate::time::now_millis();
-    let duration_ms = finished_at - started_at;
+    let duration_ms = finished_at.saturating_sub(started_at);
     let status = if run.cancelled {
         "cancelled".to_string()
     } else if run.directories.is_empty() {
@@ -129,7 +139,18 @@ pub fn entry_from_run(
     } else {
         "partial".to_string()
     };
-    let index = if run.directories.is_empty() { None } else { Some(Arc::new(std::sync::RwLock::new(ScanIndex::from_run(&run)))) };
+    let crate::scanner::walker::ScanRun {
+        files,
+        directories,
+        errors,
+        hit_limit,
+        ..
+    } = run;
+    let index = if directories.is_empty() {
+        None
+    } else {
+        Some(Arc::new(std::sync::RwLock::new(ScanIndex::from_parts(files, directories))))
+    };
     ScanEntry {
         scan_id,
         root_path,
@@ -138,10 +159,10 @@ pub fn entry_from_run(
         finished_at: Some(finished_at),
         status,
         index,
-        errors: run.errors,
+        errors,
         pruned_nodes: 0,
         expected_bytes,
-        hit_limit: run.hit_limit,
+        hit_limit,
         duration_ms: Some(duration_ms),
     }
 }

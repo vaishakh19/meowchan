@@ -42,16 +42,12 @@ pub struct FileDetails {
 /// Reads details for a single path. Folder totals come from the live scan index when available.
 #[tauri::command]
 pub fn file_details(path: String, state: State<'_, AppState>) -> AppResult<FileDetails> {
+    validate_path(&path)?;
     let candidate = PathBuf::from(&path);
-    if path.trim().is_empty() {
-        return Err(AppError::InvalidArgument("No path was provided.".to_string()));
+    if let Some(parent) = candidate.parent() {
+        crate::filesystem::entries::ensure_no_reparse_components(parent)
+            .map_err(|error| AppError::io(parent.display().to_string(), &error))?;
     }
-    if path.ends_with("\\[Other]") {
-        return Err(AppError::InvalidArgument(
-            "This is an aggregate placeholder, not a real filesystem entry.".to_string(),
-        ));
-    }
-
     let meta = read_metadata(&candidate, 0)
         .map_err(|error| AppError::io(&path, &error))?;
 
@@ -76,7 +72,7 @@ pub fn file_details(path: String, state: State<'_, AppState>) -> AppResult<FileD
         (0, 0, meta.size, meta.disk_size)
     };
 
-    let accessed_at = std::fs::metadata(crate::filesystem::long_path::to_unc_long_path(&candidate))
+    let accessed_at = std::fs::symlink_metadata(crate::filesystem::long_path::to_unc_long_path(&candidate))
         .ok()
         .and_then(|metadata| millis(metadata.accessed().ok()));
 
@@ -160,6 +156,8 @@ pub fn open_path(path: String) -> AppResult<()> {
 }
 
 fn ensure_exists(path: &Path) -> AppResult<()> {
+    crate::filesystem::entries::ensure_no_reparse_components(path)
+        .map_err(|error| AppError::io(path.display().to_string(), &error))?;
     match path.try_exists() {
         Ok(true) => Ok(()),
         Ok(false) => Err(AppError::NotFound(path.display().to_string())),

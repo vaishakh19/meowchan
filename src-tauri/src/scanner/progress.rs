@@ -1,9 +1,7 @@
 //! Progress reporting.
 //!
-//! Counters live in atomics so worker threads can update them without contending on a lock. The
-//! emitter thread reads a consistent-enough snapshot roughly every 100 ms — the numbers are
-//! monotonic per counter, so a snapshot is always self-consistent in the direction that matters
-//! (nothing ever goes backwards).
+//! Worker counters use atomics. One atomic reservation enforces the entry cap exactly even with
+//! parallel directory readers; progress is sampled by the Tauri command at roughly 10 Hz.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -68,7 +66,9 @@ pub struct ProgressCounters {
     pub folders: AtomicU64,
     pub bytes: AtomicU64,
     pub errors: AtomicUsize,
-    pub cancelled: AtomicBool,
+    entries: AtomicU64,
+    cancelled: AtomicBool,
+    limit_reached: AtomicBool,
     current_path: Mutex<String>,
     phase: Mutex<ScanPhase>,
 }
@@ -76,6 +76,31 @@ pub struct ProgressCounters {
 impl ProgressCounters {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Reserves exactly one entry slot, counting the scan root as an entry too. When `limit` is
+    /// zero it is treated as the hard default rather than an unlimited scan.
+    pub fn reserve_entry(&self, requested_limit: u64) -> bool {
+        let limit = crate::scanner::walker::effective_max_entries(requested_limit);
+        let mut current = self.entries.load(Ordering::Relaxed);
+        loop {
+            if current >= limit {
+                return false;
+            }
+            match self.entries.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    pub fn entries(&self) -> u64 {
+        self.entries.load(Ordering::Relaxed)
     }
 
     pub fn add_file(&self, bytes: u64) {
@@ -89,6 +114,14 @@ impl ProgressCounters {
 
     pub fn add_error(&self) {
         self.errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn mark_limit_reached(&self) -> bool {
+        !self.limit_reached.swap(true, Ordering::SeqCst)
+    }
+
+    pub fn is_limit_reached(&self) -> bool {
+        self.limit_reached.load(Ordering::SeqCst)
     }
 
     pub fn cancel(&self) {
@@ -128,10 +161,7 @@ impl ProgressCounters {
     }
 
     pub fn current_path(&self) -> String {
-        self.current_path
-            .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+        self.current_path.lock().map(|guard| guard.clone()).unwrap_or_default()
     }
 
     pub fn phase(&self) -> ScanPhase {
@@ -147,6 +177,7 @@ pub struct ProgressSnapshot {
     pub status: ScanStatus,
     pub truncated: bool,
     pub phase: ScanPhase,
+    pub entries_scanned: u64,
     pub files_scanned: u64,
     pub folders_scanned: u64,
     pub bytes_analyzed: u64,
@@ -157,7 +188,8 @@ pub struct ProgressSnapshot {
     pub percent: Option<f64>,
 }
 
-/// ETA: only meaningful once more than 5% of the expected total has been seen.
+/// ETA is only meaningful when the caller has a same-unit expected byte total and more than 5% has
+/// been analyzed. Folder scans intentionally pass `None` instead of inventing an expected size.
 pub fn estimate(analyzed: u64, expected: Option<u64>, elapsed_ms: u64) -> (Option<f64>, Option<u64>) {
     let expected = match expected {
         Some(value) if value > 0 => value,
@@ -198,6 +230,18 @@ mod tests {
     fn eta_is_unknown_without_an_expected_total() {
         assert_eq!(estimate(500, None, 1000), (None, None));
         assert_eq!(estimate(500, Some(0), 1000), (None, None));
+    }
+
+    #[test]
+    fn entry_limit_reservation_is_exact_and_sets_truncation() {
+        let counters = ProgressCounters::new();
+        assert!(counters.reserve_entry(3));
+        assert!(counters.reserve_entry(3));
+        assert!(counters.reserve_entry(3));
+        assert!(!counters.reserve_entry(3));
+        assert_eq!(counters.entries(), 3);
+        assert!(counters.mark_limit_reached());
+        assert!(counters.is_limit_reached());
     }
 
     #[test]

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { computeQuickWins, totalQuickWinBytes } from './quickWins';
-import { generateDemoMachine } from '@/lib/backend/demo/demoFs';
 import type { TreeNode } from '@/types/contracts';
 import { stablePathId } from '@/lib/id';
 
@@ -123,16 +122,4 @@ describe('computeQuickWins', () => {
     expect(totalQuickWinBytes(duplicated)).toBe(totalQuickWinBytes(wins));
   });
 
-  it('works on a realistic scan tree', () => {
-    const machine = generateDemoMachine(99);
-    const realWins = computeQuickWins(machine.root);
-    expect(realWins.length).toBeGreaterThan(3);
-    for (const win of realWins) {
-      expect(win.bytes).toBeGreaterThan(0);
-      expect(win.label.length).toBeGreaterThan(0);
-      expect(win.hint.length).toBeGreaterThan(0);
-    }
-    // The totals must never exceed the drive contents.
-    expect(totalQuickWinBytes(realWins)).toBeLessThanOrEqual(machine.root.sizeBytes);
-  });
 });

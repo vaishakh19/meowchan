@@ -5,8 +5,8 @@
  * canonicalizes and re-validates every path before touching the filesystem — but the frontend
  * uses the same rules so obviously-bad input never reaches it and error messages are identical.
  *
- * Deliberately dependency-free and synchronous: it is unit-tested and also used by the
- * in-browser demo transport.
+ * Deliberately dependency-free and synchronous so the same validation rules can be unit-tested
+ * without opening the desktop runtime.
  */
 
 /** `C:\`, `\\server\share\`, `/home/user` */
@@ -168,7 +168,6 @@ export function isWithin(child: string, parent: string): boolean {
 export function isSafePathString(p: string): boolean {
   if (!p || p.length === 0) return false;
   if (p.includes('\0')) return false;
-  // eslint-disable-next-line no-control-regex
   if (/[\u0001-\u001f]/.test(p)) return false;
   if (p.length > 32_767) return false; // Windows extended-length path ceiling
   return true;

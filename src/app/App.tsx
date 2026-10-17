@@ -61,7 +61,12 @@ function Shell(): React.JSX.Element {
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         <main className="flex min-w-0 flex-1 flex-col bg-canvas" aria-label="Workspace">
-          {state.drivesError ? <div role="alert" className="border-b border-line p-3 text-danger">{state.drivesError}</div> : null}
+          {state.drivesError ? (
+            <div role="alert" className="border-b border-danger/30 bg-danger/5 px-4 py-3 text-danger" data-testid="runtime-error">
+              <h1 className="text-sm font-semibold">Run inside the desktop app</h1>
+              <p className="mt-1 text-xs">{state.drivesError}</p>
+            </div>
+          ) : null}
           {state.route === 'home' ? <HomeView /> : null}
           {state.route === 'analyze' ? <AnalyzeView /> : null}
           {state.route === 'large-files' ? <LargeFilesView /> : null}

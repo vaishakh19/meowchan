@@ -133,8 +133,15 @@ async fn delete_one(
     if let Err(guard) = guard_structure(&candidate, Path::new(root_path)) {
         return Err((path.to_string(), guard.explanation()));
     }
+    let candidate = normalize_lexically(&candidate);
 
-    // 2. Live filesystem checks. `symlink_metadata` never follows links.
+    // 2. Check every path component from the volume root down. Each component is
+    // inspected before reading its child so a replaced junction cannot redirect the
+    // later metadata lookup outside the scanned tree.
+    ensure_no_reparse_ancestors(&candidate)
+        .map_err(|reason| (path.to_string(), reason))?;
+
+    // `symlink_metadata` describes the leaf itself and never follows a link.
     let metadata = std::fs::symlink_metadata(to_unc_long_path(&candidate))
         .map_err(|error| (path.to_string(), AppError::io(path, &error).to_string()))?;
 
@@ -177,6 +184,10 @@ async fn delete_one(
         ));
     }
 
+    // Recheck immediately before invoking the shell to narrow the path-replacement race.
+    ensure_no_reparse_ancestors(&candidate)
+        .map_err(|reason| (path.to_string(), reason))?;
+
     // 3. The shell operation itself.
     platform::recycle_bin_delete(&candidate)
         .map_err(|message| (path.to_string(), message))?;
@@ -217,6 +228,25 @@ async fn delete_one(
         kind: kind.to_string(),
         size_bytes,
     })
+}
+
+/// Walks ancestors from the volume root toward the leaf, rejecting links/reparse points before
+/// inspecting each child. `read_metadata` uses `symlink_metadata`, never `metadata`.
+fn ensure_no_reparse_ancestors(path: &Path) -> Result<(), String> {
+    let normalized = normalize_lexically(path);
+    let mut ancestors: Vec<PathBuf> = normalized.ancestors().map(Path::to_path_buf).collect();
+    ancestors.reverse();
+    for ancestor in ancestors {
+        let metadata = crate::filesystem::entries::read_metadata(&ancestor, 0)
+            .map_err(|error| format!("Could not safely inspect {}: {error}", ancestor.to_string_lossy()))?;
+        if metadata.is_reparse_point {
+            return Err(format!(
+                "This item is beneath a symbolic link or reparse point ({}). Diskora refuses to follow it.",
+                ancestor.to_string_lossy()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Name and scanned size of an item, taken from the scan index.
@@ -554,27 +584,43 @@ mod tests {
         assert!(validate_path("C:\\Users\\me").is_ok());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn rejects_paths_that_pass_through_a_symlinked_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let directory = std::env::temp_dir().join(format!("diskwise-delete-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.join("real")).unwrap();
+        symlink(directory.join("real"), directory.join("link")).unwrap();
+        let candidate = directory.join("link").join("missing.bin");
+        assert!(ensure_no_reparse_ancestors(&candidate).is_err());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
     #[test]
     fn describe_reads_names_and_sizes_from_the_index() {
         // Built from a synthetic run: one folder with one file.
         let run = crate::scanner::walker::ScanRun {
             files: vec![crate::filesystem::FileRecord {
-                path: PathBuf::from("C:\\fixture\\a.bin"),
+                path: PathBuf::from("C:/fixture/a.bin"),
                 name: "a.bin".to_string(),
                 size: 10,
                 disk_size: Some(4096),
                 modified_at: None,
                 extension: Some("bin".to_string()),
-                parent_path: PathBuf::from("C:\\fixture"),
                 depth: 1,
+                ..Default::default()
             }],
             directories: vec![crate::scanner::walker::DirectoryRecord {
                 name: "fixture".to_string(),
-                path: PathBuf::from("C:\\fixture"),
+                path: PathBuf::from("C:/fixture"),
                 parent: None,
                 depth: 0,
                 modified_at: None,
                 created_at: None,
+                is_symlink: false,
+                is_junction: false,
                 access_denied: false,
             }],
             errors: Vec::new(),
@@ -584,13 +630,13 @@ mod tests {
         };
         let index = ScanIndex::from_run(&run);
         assert_eq!(
-            describe(&index, Path::new("C:\\fixture\\a.bin")),
+            describe(&index, Path::new("C:/fixture/a.bin")),
             Some(("a.bin".to_string(), 10))
         );
         assert_eq!(
-            describe(&index, Path::new("C:\\fixture")),
+            describe(&index, Path::new("C:/fixture")),
             Some(("fixture".to_string(), 10))
         );
-        assert_eq!(describe(&index, Path::new("C:\\fixture\\missing.bin")), None);
+        assert_eq!(describe(&index, Path::new("C:/fixture/missing.bin")), None);
     }
 }
