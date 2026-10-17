@@ -32,6 +32,9 @@ pub struct FileDetails {
     pub extension: Option<String>,
     pub category: String,
     pub is_symlink: bool,
+    pub is_junction: bool,
+    pub is_cloud_placeholder: bool,
+    pub cloud_status: Option<String>,
     pub is_read_only: bool,
     pub parent_path: Option<String>,
 }
@@ -91,6 +94,9 @@ pub fn file_details(path: String, state: State<'_, AppState>) -> AppResult<FileD
         extension: meta.extension,
         category: classify(&candidate, meta.kind == Kind::Folder),
         is_symlink: meta.is_symlink,
+        is_junction: meta.is_junction,
+        is_cloud_placeholder: meta.is_cloud_placeholder,
+        cloud_status: meta.cloud_status,
         is_read_only: {
             #[cfg(windows)]
             {

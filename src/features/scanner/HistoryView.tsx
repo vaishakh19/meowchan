@@ -6,28 +6,42 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Database, History, Play } from 'lucide-react';
+import { Database, Download, GitCompare, History, Play } from 'lucide-react';
 import { useApp } from '@/app/state';
 import { Button, EmptyState, Panel, SectionTitle, cx } from '@/components/ui/primitives';
 import { formatBytes, formatCount, formatDateTime, formatDuration, formatRelativeTime } from '@/lib/format';
+import { CompareScansView } from './CompareScansView';
 import type { ScanSummary } from '@/types/contracts';
 
 export function HistoryView(): React.JSX.Element {
   const { state } = useApp();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showCompare, setShowCompare] = useState(false);
   const history = state.scan.history;
   const record = useMemo(
     () => history.find((item) => item.scanId === selectedId) ?? null,
     [history, selectedId],
   );
 
+  if (showCompare) {
+    return <CompareScansView onClose={() => setShowCompare(false)} />;
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="history-view">
-      <header className="border-b border-line bg-surface px-3 py-2">
-        <h1 className="text-[13px] font-semibold text-ink">Scan history</h1>
-        <p className="mt-0.5 text-[10px] text-ink-faint">
-          Stored locally in this PC's SQLite database. Diskora never uploads scan data.
-        </p>
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface px-3 py-2">
+        <div>
+          <h1 className="text-[13px] font-semibold text-ink">Scan history</h1>
+          <p className="mt-0.5 text-[10px] text-ink-faint">
+            Stored locally in this PC's SQLite database. Diskora never uploads scan data.
+          </p>
+        </div>
+        {history.length >= 2 ? (
+          <Button size="sm" variant="secondary" onClick={() => setShowCompare(true)}>
+            <GitCompare aria-hidden className="size-3" />
+            Compare Scans
+          </Button>
+        ) : null}
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -118,6 +132,30 @@ function RecordDetail({ record }: { record: ScanSummary }): React.JSX.Element {
       >
         <Play aria-hidden className="size-3" />
         Rescan this path
+      </Button>
+      <Button
+        size="sm"
+        variant="secondary"
+        className="mt-1.5 w-full justify-center"
+        onClick={async () => {
+          try {
+            const transport = await import('@/lib/transport').then((m) => m.getTransport());
+            const csv = await transport.exportScanCsv({ scanId: record.scanId, exportType: 'all-files' });
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `diskora-scan-${record.scanId}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            actions.toast({ kind: 'success', title: 'Exported CSV', detail: 'Scan CSV exported.' });
+          } catch (err) {
+            actions.toast({ kind: 'error', title: 'Export failed', detail: String(err) });
+          }
+        }}
+      >
+        <Download aria-hidden className="size-3" />
+        Export CSV
       </Button>
       <p className="mt-2 flex items-start gap-1.5 text-[10px] leading-relaxed text-ink-faint">
         <Database aria-hidden className="mt-px size-3 shrink-0" />

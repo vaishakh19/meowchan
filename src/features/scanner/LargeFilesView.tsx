@@ -27,13 +27,21 @@ const SIZE_PRESETS = [
   { label: '> 5 GB', bytes: 5 * 1024 * MB },
 ];
 
-const ROW_HEIGHT = 30;
+const AGE_PRESETS = [
+  { label: 'Any age', days: '' },
+  { label: '1+ year', days: '365' },
+  { label: '2+ years', days: '730' },
+  { label: '3+ years', days: '1095' },
+];
+
+const ROW_HEIGHT = 34;
 const PAGE = 250;
 
 export function LargeFilesView(): React.JSX.Element {
   const { state, actions } = useApp();
   const itemMenu = useItemMenu();
-  const { largeFiles, scan } = state;
+  const { largeFiles, scan, pro } = state;
+  const proEnabled = pro?.enabled === true;
 
   const [minBytes, setMinBytes] = useState(100 * MB);
   const [customSize, setCustomSize] = useState('');
@@ -41,6 +49,7 @@ export function LargeFilesView(): React.JSX.Element {
   const [ageDays, setAgeDays] = useState('');
   const [sort, setSort] = useState<LargeFileSort>('size-desc');
   const [offset, setOffset] = useState(0);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
 
   const hasScan = scan.result !== null;
 
@@ -49,6 +58,7 @@ export function LargeFilesView(): React.JSX.Element {
     if (!hasScan) return;
     const handle = window.setTimeout(() => {
       setOffset(0);
+      setSelectedPaths([]);
       void actions.runLargeFileQuery({
         minBytes,
         extensions: extension.trim() ? [extension.trim().replace(/^\./, '').toLowerCase()] : [],
@@ -64,6 +74,22 @@ export function LargeFilesView(): React.JSX.Element {
   }, [minBytes, extension, ageDays, sort, hasScan]);
 
   const items = largeFiles.page?.items ?? [];
+
+  const toggleSelect = (path: string) => {
+    setSelectedPaths((prev) =>
+      prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path],
+    );
+  };
+
+  const selectAll = () => {
+    if (selectedPaths.length === items.length) setSelectedPaths([]);
+    else setSelectedPaths(items.map((i) => i.path));
+  };
+
+  const selectedBytes = useMemo(() => {
+    const set = new Set(selectedPaths);
+    return items.filter((i) => set.has(i.path)).reduce((sum, i) => sum + i.sizeBytes, 0);
+  }, [items, selectedPaths]);
 
   const extensionOptions = useMemo(() => {
     const counts = new Map<string, number>();
@@ -113,6 +139,22 @@ export function LargeFilesView(): React.JSX.Element {
           </div>
         </div>
 
+        <div>
+          <span className="mb-1 block text-[11px] font-medium text-ink-muted">Age filter</span>
+          <div className="flex flex-wrap items-center gap-1">
+            {AGE_PRESETS.map((preset) => (
+              <Button
+                key={preset.label}
+                size="sm"
+                variant={ageDays === preset.days ? 'primary' : 'secondary'}
+                onClick={() => setAgeDays(preset.days)}
+              >
+                {preset.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
         <TextField
           label="Custom minimum"
           placeholder="e.g. 750 MB"
@@ -130,22 +172,22 @@ export function LargeFilesView(): React.JSX.Element {
           placeholder="mp4"
           value={extension}
           onChange={(event) => setExtension(event.target.value)}
-          className="h-7 w-24 text-xs"
+          className="h-7 w-20 text-xs"
         />
 
         <TextField
-          label="Not modified in (days)"
+          label="Custom age (days)"
           placeholder="180"
           value={ageDays}
           onChange={(event) => setAgeDays(event.target.value.replace(/[^0-9]/g, ''))}
-          className="h-7 w-28 text-xs"
+          className="h-7 w-24 text-xs"
         />
 
         <Select
           label="Sort"
           value={sort}
           onChange={(event) => setSort(event.target.value as LargeFileSort)}
-          className="h-7 w-40 text-xs"
+          className="h-7 w-36 text-xs"
         >
           <option value="size-desc">Largest first</option>
           <option value="size-asc">Smallest first</option>
@@ -156,34 +198,68 @@ export function LargeFilesView(): React.JSX.Element {
         </Select>
       </div>
 
-      {/* ------------------------------ summary ------------------------------ */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line bg-surface px-3 py-1.5 text-[11px]">
-        <span className="dw-tnum text-ink">
-          <strong data-testid="large-files-count">{formatCount(largeFiles.page?.total ?? 0)}</strong> files at
-          least {formatBytes(minBytes)}
-        </span>
-        <span className="dw-tnum text-ink-muted">
-          totalling {formatBytes(largeFiles.page?.totalBytes ?? 0)}
-        </span>
-        {extensionOptions.length > 1 ? (
-          <span className="flex flex-wrap items-center gap-1.5">
-            {extensionOptions.map(([ext, count]) => (
-              <button
-                key={ext}
-                type="button"
-                onClick={() => setExtension(extension === ext ? '' : ext)}
-                className={cx(
-                  'rounded-full border px-1.5 py-px text-[10px] transition-colors',
-                  extension === ext
-                    ? 'border-accent bg-accent text-accent-ink'
-                    : 'border-line bg-surface text-ink-muted hover:text-ink',
-                )}
-              >
-                {ext} · {formatCount(count)}
-              </button>
-            ))}
+      {/* ------------------------------ summary & actions ------------------------------ */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line bg-surface px-3 py-1.5 text-[11px]">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={items.length > 0 && selectedPaths.length === items.length}
+              onChange={selectAll}
+              className="rounded border-line text-accent focus:ring-0 size-3.5"
+            />
+            <span className="text-ink font-medium text-[11px]">Select all</span>
+          </label>
+          <span className="dw-tnum text-ink">
+            <strong data-testid="large-files-count">{formatCount(largeFiles.page?.total ?? 0)}</strong> files at
+            least {formatBytes(minBytes)}
           </span>
-        ) : null}
+          <span className="dw-tnum text-ink-muted">
+            totalling {formatBytes(largeFiles.page?.totalBytes ?? 0)}
+          </span>
+          {extensionOptions.length > 1 ? (
+            <span className="flex flex-wrap items-center gap-1.5 ml-2">
+              {extensionOptions.map(([ext, count]) => (
+                <button
+                  key={ext}
+                  type="button"
+                  onClick={() => setExtension(extension === ext ? '' : ext)}
+                  className={cx(
+                    'rounded-full border px-1.5 py-px text-[10px] transition-colors',
+                    extension === ext
+                      ? 'border-accent bg-accent text-accent-ink'
+                      : 'border-line bg-surface text-ink-muted hover:text-ink',
+                  )}
+                >
+                  {ext} · {formatCount(count)}
+                </button>
+              ))}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {selectedPaths.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <span className="dw-tnum text-[11px] text-ink font-medium">
+                {selectedPaths.length} selected ({formatBytes(selectedBytes)})
+              </span>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => {
+                  if (!proEnabled) {
+                    actions.promptUpgrade('Safe file deletion');
+                  } else {
+                    actions.requestDeletion(selectedPaths);
+                  }
+                }}
+              >
+                Move to Recycle Bin (Pro)
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {/* ------------------------------- table ------------------------------- */}
@@ -219,6 +295,7 @@ export function LargeFilesView(): React.JSX.Element {
             <div
               className={cx(
                 'flex h-full items-center gap-2 border-b border-line/60 px-3 transition-colors hover:bg-surface-sunken',
+                selectedPaths.includes(item.path) && 'bg-accent-soft/40',
                 state.viz.selectedPath === item.path && 'bg-info-soft',
               )}
               onContextMenu={(event) => {
@@ -226,6 +303,13 @@ export function LargeFilesView(): React.JSX.Element {
                 itemMenu.open(item.path, event.clientX, event.clientY, 'file');
               }}
             >
+              <input
+                type="checkbox"
+                checked={selectedPaths.includes(item.path)}
+                onChange={() => toggleSelect(item.path)}
+                aria-label={`Select ${item.name}`}
+                className="rounded border-line text-accent focus:ring-0 size-3.5 shrink-0"
+              />
               <FileIcon
                 name={item.name}
                 extension={item.extension}
@@ -234,7 +318,19 @@ export function LargeFilesView(): React.JSX.Element {
                 className="size-4 shrink-0"
               />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[12px] text-ink">{item.name}</p>
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="truncate text-[12px] text-ink">{item.name}</span>
+                  {item.isJunction ? (
+                    <span className="rounded bg-warn-soft px-1 text-[9px] font-medium text-warn">Junction</span>
+                  ) : item.isSymlink ? (
+                    <span className="rounded bg-warn-soft px-1 text-[9px] font-medium text-warn">Symlink</span>
+                  ) : null}
+                  {item.cloudStatus === 'online-only' ? (
+                    <span className="rounded bg-info-soft px-1 text-[9px] font-medium text-info">Cloud: Online</span>
+                  ) : item.cloudStatus === 'pinned' ? (
+                    <span className="rounded bg-info-soft px-1 text-[9px] font-medium text-info">Cloud: Pinned</span>
+                  ) : null}
+                </div>
                 <p className="truncate font-mono text-[9px] text-ink-faint" title={item.path}>
                   {item.path}
                 </p>

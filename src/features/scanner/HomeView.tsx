@@ -24,6 +24,7 @@ import { formatBytes, formatCount, formatDateTime, formatDuration, formatPercent
 import { categoryColor, categoryLabel } from '@/lib/categories';
 import { categoryBreakdown } from '@/features/visualization/layout';
 import { computeQuickWins, totalQuickWinBytes } from './quickWins';
+import { StorageBreakdownSection } from './StorageBreakdownView';
 
 export function HomeView(): React.JSX.Element {
   const { state, actions } = useApp();
@@ -122,6 +123,9 @@ export function HomeView(): React.JSX.Element {
           </div>
         )}
       </section>
+
+      {/* ------------------- storage breakdown ------------------- */}
+      <StorageBreakdownSection />
 
       {/* --------------------------- last scan --------------------------- */}
       <section className="px-5 pb-4">

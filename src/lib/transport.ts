@@ -16,10 +16,13 @@ import type {
   LargeFileQuery,
   PrivacyReport,
   ProStatus,
+  ScanGrowthComparison,
   ScanOptions,
   ScanProgress,
   ScanResult,
   ScanSummary,
+  StorageBreakdownReport,
+  UserStorageReport,
 } from '@/types/contracts';
 
 export type Unsubscribe = () => void;
@@ -37,6 +40,7 @@ export interface BackendTransport {
 
   /* Drives & scanning */
   listDrives(): Promise<DriveInfo[]>;
+  storageBreakdown(driveId?: string): Promise<StorageBreakdownReport>;
   pickFolder(): Promise<string | null>;
   scanStart(options: ScanOptions): Promise<string>;
   scanCancel(scanId: string): Promise<void>;
@@ -44,6 +48,9 @@ export interface BackendTransport {
   scanList(): Promise<ScanSummary[]>;
   scanChildren(scanId: string, path: string, offset: number, limit: number): Promise<ChildrenPage>;
   scanDelete(scanId: string): Promise<void>;
+  userStorageReport(scanId: string): Promise<UserStorageReport>;
+  exportScanCsv(request: import('@/types/contracts').CsvExportRequest): Promise<string>;
+  compareScans(baselineScanId: string, currentScanId: string): Promise<ScanGrowthComparison>;
 
   /* Files */
   listLargeFiles(query: LargeFileQuery): Promise<LargeFilePage>;

@@ -37,6 +37,7 @@ import type {
   ScanProgress,
   ScanResult,
   ScanSummary,
+  StorageBreakdownReport,
   TreeNode,
 } from '@/types/contracts';
 import { getTransport, type BackendTransport, type Unsubscribe } from '@/lib/transport';
@@ -79,6 +80,12 @@ export interface AppState {
   drives: DriveInfo[];
   selectedDriveId: string | null;
   drivesError: string | null;
+
+  breakdown: {
+    report: StorageBreakdownReport | null;
+    loading: boolean;
+    error: string | null;
+  };
 
   scan: {
     scanning: boolean;
@@ -153,6 +160,11 @@ const initialState: AppState = {
   drives: [],
   selectedDriveId: null,
   drivesError: null,
+  breakdown: {
+    report: null,
+    loading: false,
+    error: null,
+  },
   scan: {
     scanning: false,
     activeScanId: null,
@@ -197,6 +209,9 @@ type Action =
   | { type: 'drives'; drives: DriveInfo[] }
   | { type: 'drives-error'; message: string }
   | { type: 'select-drive'; driveId: string }
+  | { type: 'breakdown-loading' }
+  | { type: 'breakdown-data'; report: StorageBreakdownReport }
+  | { type: 'breakdown-error'; message: string }
   | { type: 'scan-start'; scanId: string }
   | { type: 'scan-progress'; progress: ScanProgress }
   | { type: 'scan-result'; result: ScanResult }
@@ -252,6 +267,12 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, drivesError: action.message };
     case 'select-drive':
       return { ...state, selectedDriveId: action.driveId };
+    case 'breakdown-loading':
+      return { ...state, breakdown: { ...state.breakdown, loading: true, error: null } };
+    case 'breakdown-data':
+      return { ...state, breakdown: { report: action.report, loading: false, error: null } };
+    case 'breakdown-error':
+      return { ...state, breakdown: { ...state.breakdown, loading: false, error: action.message } };
     case 'scan-start':
       return {
         ...state,
@@ -392,6 +413,7 @@ export interface AppActions {
   navigate(route: Route): void;
   refreshDrives(): Promise<void>;
   selectDrive(driveId: string): void;
+  loadStorageBreakdown(driveId?: string): Promise<void>;
   scanDrive(driveId?: string): Promise<void>;
   scanPath(path: string): Promise<void>;
   pickAndScanFolder(): Promise<void>;
@@ -506,7 +528,12 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
       if (privacy) dispatch({ type: 'privacy', report: privacy });
       dispatch({ type: 'scan-history', history });
       const system = drives.find((drive) => drive.isSystemDrive) ?? drives[0];
-      if (system) dispatch({ type: 'select-drive', driveId: system.id });
+      if (system) {
+        dispatch({ type: 'select-drive', driveId: system.id });
+        transport.storageBreakdown(system.id)
+          .then((report) => { if (!cancelled) dispatch({ type: 'breakdown-data', report }); })
+          .catch((err) => { if (!cancelled) dispatch({ type: 'breakdown-error', message: describe(err) }); });
+      }
       dispatch({ type: 'ready', kind: transport.kind, canMutate: transport.canMutate });
     })().catch((error: unknown) => {
       if (!cancelled) dispatch({ type: 'drives-error', message: describe(error) });
@@ -546,13 +573,30 @@ export function AppStateProvider({ children }: { children: ReactNode }): React.J
 
       refreshDrives: async () => {
         try {
-          dispatch({ type: 'drives', drives: await requireTransport().listDrives() });
+          const drives = await requireTransport().listDrives();
+          dispatch({ type: 'drives', drives });
+          const currentId = stateRef.current.selectedDriveId;
+          if (currentId) void actions.loadStorageBreakdown(currentId);
         } catch (error) {
           dispatch({ type: 'drives-error', message: describe(error) });
         }
       },
 
-      selectDrive: (driveId) => dispatch({ type: 'select-drive', driveId }),
+      selectDrive: (driveId) => {
+        dispatch({ type: 'select-drive', driveId });
+        void actions.loadStorageBreakdown(driveId);
+      },
+
+      loadStorageBreakdown: async (driveId?: string) => {
+        const id = driveId ?? stateRef.current.selectedDriveId ?? 'C:';
+        dispatch({ type: 'breakdown-loading' });
+        try {
+          const report = await requireTransport().storageBreakdown(id);
+          dispatch({ type: 'breakdown-data', report });
+        } catch (error) {
+          dispatch({ type: 'breakdown-error', message: describe(error) });
+        }
+      },
 
       scanDrive: async (driveId?: string) => {
         const id = driveId ?? stateRef.current.selectedDriveId;

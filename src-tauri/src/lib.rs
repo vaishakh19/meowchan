@@ -46,12 +46,16 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::drives::list_drives,
+            commands::drives::storage_breakdown,
             commands::scan::scan_start,
             commands::scan::scan_cancel,
             commands::scan::scan_get,
             commands::scan::scan_list,
             commands::scan::scan_children,
             commands::scan::scan_delete,
+            commands::scan::user_storage_report,
+            commands::scan::export_scan_csv,
+            commands::scan::compare_scans,
             commands::large_files::list_large_files,
             commands::files::file_details,
             commands::files::reveal_in_explorer,

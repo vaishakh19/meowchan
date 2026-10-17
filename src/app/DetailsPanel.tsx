@@ -93,6 +93,16 @@ export function DetailsPanel(): React.JSX.Element {
                       {categoryLabel(node.category)}
                     </Badge>
                   ) : null}
+                  {node?.isJunction ? <Badge tone="warn">Junction</Badge> : node?.isSymlink ? <Badge tone="warn">Symlink</Badge> : null}
+                  {node?.isCloudPlaceholder || (node?.cloudStatus && node.cloudStatus !== 'none') ? (
+                    <Badge tone="info">
+                      {node.cloudStatus === 'online-only'
+                        ? 'Cloud: Online-only'
+                        : node.cloudStatus === 'pinned'
+                          ? 'Cloud: Pinned'
+                          : 'Cloud: Local'}
+                    </Badge>
+                  ) : null}
                   {synthetic ? <Badge tone="warn">Aggregate</Badge> : null}
                 </p>
               </div>
@@ -213,6 +223,21 @@ export function DetailsPanel(): React.JSX.Element {
             <dl className="space-y-1 text-[11px]">
               <Meta label="Parent folder" value={parentPath(viz.selectedPath ?? '') ?? 'Volume root'} mono />
               <Meta label="Extension" value={node?.extension ? `.${node.extension}` : '—'} />
+              {node?.isJunction || node?.isSymlink ? (
+                <Meta label="Link target" value="Reparse link (safe: target not traversed or double-counted)" />
+              ) : null}
+              {node?.cloudStatus && node.cloudStatus !== 'none' ? (
+                <Meta
+                  label="Cloud status"
+                  value={
+                    node.cloudStatus === 'online-only'
+                      ? 'OneDrive / Cloud Files On-Demand (online only, 0 bytes local allocation)'
+                      : node.cloudStatus === 'pinned'
+                        ? 'Cloud Placeholder (Pinned to device)'
+                        : 'Cloud Placeholder (Locally cached)'
+                  }
+                />
+              ) : null}
               <Meta label="Modified" value={formatDateTime(node?.modifiedAt ?? null)} />
               <Meta label="Modified" hint={formatRelativeTime(node?.modifiedAt ?? null)} value="" hideLabel />
               <Meta label="Created" value={formatDateTime(node?.createdAt ?? null)} />

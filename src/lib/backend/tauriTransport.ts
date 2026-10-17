@@ -14,6 +14,7 @@ import type {
   AppSettings,
   AppVersion,
   ChildrenPage,
+  CsvExportRequest,
   DeleteItemsRequest,
   DeleteOutcome,
   DriveInfo,
@@ -26,10 +27,13 @@ import type {
   LargeFileQuery,
   PrivacyReport,
   ProStatus,
+  ScanGrowthComparison,
   ScanOptions,
   ScanProgress,
   ScanResult,
   ScanSummary,
+  StorageBreakdownReport,
+  UserStorageReport,
 } from '@/types/contracts';
 import type { BackendTransport, Unsubscribe } from '@/lib/transport';
 
@@ -61,6 +65,7 @@ export function createTauriTransport(): BackendTransport {
 
     /* Drives & scanning */
     listDrives: () => invoke<DriveInfo[]>('list_drives'),
+    storageBreakdown: (driveId?: string) => invoke<StorageBreakdownReport>('storage_breakdown', { driveId }),
     pickFolder: async () => {
       const dialog = await import('@tauri-apps/plugin-dialog');
       const result = await dialog.open({ directory: true, multiple: false, title: 'Select a folder to scan' });
@@ -73,6 +78,10 @@ export function createTauriTransport(): BackendTransport {
     scanChildren: (scanId: string, path: string, offset: number, limit: number) =>
       invoke<ChildrenPage>('scan_children', { scanId, path, offset, limit }),
     scanDelete: (scanId: string) => invoke<void>('scan_delete', { scanId }),
+    userStorageReport: (scanId: string) => invoke<UserStorageReport>('user_storage_report', { scanId }),
+    exportScanCsv: (request: CsvExportRequest) => invoke<string>('export_scan_csv', { request }),
+    compareScans: (baselineScanId: string, currentScanId: string) =>
+      invoke<ScanGrowthComparison>('compare_scans', { baselineScanId, currentScanId }),
 
     /* Files */
     listLargeFiles: (query: LargeFileQuery) => invoke<LargeFilePage>('list_large_files', { query }),

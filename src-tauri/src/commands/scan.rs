@@ -537,6 +537,331 @@ fn build_result(entry: &ScanEntry) -> ScanResult {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopFolderEntry {
+    pub name: String,
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserStorageProfile {
+    pub username: String,
+    pub user_path: String,
+    pub total_bytes: u64,
+    pub disk_size_bytes: Option<u64>,
+    pub file_count: u64,
+    pub folder_count: u64,
+    pub categories: std::collections::HashMap<String, u64>,
+    pub top_folders: Vec<TopFolderEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserStorageReport {
+    pub drive_id: String,
+    pub users: Vec<UserStorageProfile>,
+    pub total_attributed_bytes: u64,
+}
+
+#[tauri::command]
+pub fn user_storage_report(scan_id: String, state: State<'_, AppState>) -> AppResult<UserStorageReport> {
+    let scans = state.scans()?;
+    let entry = scans
+        .get(&scan_id)
+        .ok_or_else(|| AppError::NotFound(format!("Unknown scan {scan_id}.")))?;
+    let index = entry
+        .index
+        .as_ref()
+        .ok_or_else(|| AppError::NotFound("The scan is still running.".to_string()))?;
+    let index = index.read().expect("the scan index lock was poisoned");
+
+    let mut users: Vec<UserStorageProfile> = Vec::new();
+    let mut total_attributed = 0u64;
+
+    for (pos, dir) in index.directories.iter().enumerate() {
+        let path_str = dir.path.to_string_lossy().to_string();
+        let is_user_dir = {
+            let parent_is_users = dir.path.parent().map(|p| {
+                let p_str = p.to_string_lossy().to_lowercase();
+                p_str.ends_with("\\users") || p_str.ends_with("/users") || p_str == "/home" || p_str == "c:\\users"
+            }).unwrap_or(false);
+            let name_lower = dir.name.to_lowercase();
+            parent_is_users && name_lower != "public" && name_lower != "default" && name_lower != "default user" && name_lower != "all users"
+        };
+
+        if is_user_dir {
+            let agg = &index.aggregates[pos];
+            let mut categories: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+
+            let mut top_folders: Vec<TopFolderEntry> = Vec::new();
+            for &child_pos in &index.children_of(pos) {
+                let child_dir = &index.directories[child_pos];
+                let child_agg = &index.aggregates[child_pos];
+                top_folders.push(TopFolderEntry {
+                    name: child_dir.name.clone(),
+                    path: child_dir.path.to_string_lossy().to_string(),
+                    size_bytes: child_agg.size_bytes,
+                });
+            }
+            top_folders.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+
+            for file in &index.files {
+                if file.path.starts_with(&dir.path) {
+                    let cat = crate::filesystem::classify(&file.path, false);
+                    *categories.entry(cat).or_insert(0) += file.size;
+                }
+            }
+
+            total_attributed += agg.size_bytes;
+            users.push(UserStorageProfile {
+                username: dir.name.clone(),
+                user_path: path_str,
+                total_bytes: agg.size_bytes,
+                disk_size_bytes: agg.disk_size_bytes,
+                file_count: agg.file_count,
+                folder_count: agg.folder_count,
+                categories,
+                top_folders,
+            });
+        }
+    }
+
+    users.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
+
+    Ok(UserStorageReport {
+        drive_id: entry.root_name.clone(),
+        users,
+        total_attributed_bytes: total_attributed,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CsvExportRequest {
+    pub scan_id: String,
+    pub export_type: String,
+}
+
+fn csv_escape(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+#[tauri::command]
+pub fn export_scan_csv(request: CsvExportRequest, state: State<'_, AppState>) -> AppResult<String> {
+    let scans = state.scans()?;
+    let entry = scans
+        .get(&request.scan_id)
+        .ok_or_else(|| AppError::NotFound(format!("Unknown scan {}.", request.scan_id)))?;
+    let index = entry
+        .index
+        .as_ref()
+        .ok_or_else(|| AppError::NotFound("The scan is still running.".to_string()))?;
+    let index = index.read().expect("the scan index lock was poisoned");
+
+    match request.export_type.as_str() {
+        "all-files" => {
+            let mut csv = String::from("\"Path\",\"Name\",\"Extension\",\"Category\",\"Size (Bytes)\",\"Allocated Size (Bytes)\",\"Modified Time (ms)\",\"Cloud Status\",\"Is Link\"\n");
+            for file in &index.files {
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{}\n",
+                    csv_escape(&file.path.to_string_lossy()),
+                    csv_escape(&file.name),
+                    csv_escape(file.extension.as_deref().unwrap_or("")),
+                    csv_escape(&crate::filesystem::classify(&file.path, false)),
+                    file.size,
+                    file.disk_size.map(|d| d.to_string()).unwrap_or_else(|| "".to_string()),
+                    file.modified_at.map(|m| m.to_string()).unwrap_or_else(|| "".to_string()),
+                    csv_escape(file.cloud_status.as_deref().unwrap_or("none")),
+                    file.is_symlink || file.is_junction
+                ));
+            }
+            Ok(csv)
+        }
+        "large-files" => {
+            let mut csv = String::from("\"Path\",\"Name\",\"Extension\",\"Category\",\"Size (Bytes)\",\"Allocated Size (Bytes)\",\"Modified Time (ms)\",\"Cloud Status\"\n");
+            let mut sorted: Vec<_> = index.files.iter().filter(|f| f.size >= 100 * 1024 * 1024).collect();
+            sorted.sort_by(|a, b| b.size.cmp(&a.size));
+            for file in sorted {
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{},{}\n",
+                    csv_escape(&file.path.to_string_lossy()),
+                    csv_escape(&file.name),
+                    csv_escape(file.extension.as_deref().unwrap_or("")),
+                    csv_escape(&crate::filesystem::classify(&file.path, false)),
+                    file.size,
+                    file.disk_size.map(|d| d.to_string()).unwrap_or_else(|| "".to_string()),
+                    file.modified_at.map(|m| m.to_string()).unwrap_or_else(|| "".to_string()),
+                    csv_escape(file.cloud_status.as_deref().unwrap_or("none")),
+                ));
+            }
+            Ok(csv)
+        }
+        "user-attribution" => {
+            let mut csv = String::from("\"Username\",\"User Path\",\"Total Bytes\",\"Allocated Bytes\",\"File Count\",\"Folder Count\"\n");
+            for (pos, dir) in index.directories.iter().enumerate() {
+                let parent_is_users = dir.path.parent().map(|p| {
+                    let p_str = p.to_string_lossy().to_lowercase();
+                    p_str.ends_with("\\users") || p_str.ends_with("/users") || p_str == "/home" || p_str == "c:\\users"
+                }).unwrap_or(false);
+                let name_lower = dir.name.to_lowercase();
+                if parent_is_users && name_lower != "public" && name_lower != "default" && name_lower != "default user" && name_lower != "all users" {
+                    let agg = &index.aggregates[pos];
+                    csv.push_str(&format!(
+                        "{},{},{},{},{},{}\n",
+                        csv_escape(&dir.name),
+                        csv_escape(&dir.path.to_string_lossy()),
+                        agg.size_bytes,
+                        agg.disk_size_bytes.map(|d| d.to_string()).unwrap_or_else(|| "".to_string()),
+                        agg.file_count,
+                        agg.folder_count
+                    ));
+                }
+            }
+            Ok(csv)
+        }
+        "duplicates" => {
+            let reports = state.duplicate_reports.lock().map_err(|_| AppError::Internal("poisoned".into()))?;
+            let report = reports.values().find(|r| r.scan_id == request.scan_id);
+            let mut csv = String::from("\"Group ID\",\"Hash\",\"Confidence\",\"Reclaimable Bytes\",\"File Path\",\"File Size\"\n");
+            if let Some(rep) = report {
+                for group in &rep.groups {
+                    for copy in &group.copies {
+                        csv.push_str(&format!(
+                            "{},{},{},{},{},{}\n",
+                            csv_escape(&group.group_id),
+                            csv_escape(&group.hash),
+                            csv_escape(match group.confidence {
+                                crate::duplicates::grouping::DuplicateConfidence::HashOnly => "hash",
+                                crate::duplicates::grouping::DuplicateConfidence::ByteVerified => "verified",
+                            }),
+                            group.reclaimable_bytes,
+                            csv_escape(&copy.path),
+                            copy.size_bytes
+                        ));
+                    }
+                }
+            }
+            Ok(csv)
+        }
+        other => Err(AppError::InvalidArgument(format!("Unknown export type '{other}'."))),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderGrowthDiff {
+    pub path: String,
+    pub name: String,
+    pub baseline_bytes: u64,
+    pub current_bytes: u64,
+    pub delta_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanGrowthComparison {
+    pub baseline_scan_id: String,
+    pub current_scan_id: String,
+    pub baseline_started_at: i64,
+    pub current_started_at: i64,
+    pub baseline_root: String,
+    pub current_root: String,
+    pub bytes_delta: i64,
+    pub files_delta: i64,
+    pub folders_delta: i64,
+    pub category_deltas: std::collections::HashMap<String, i64>,
+    pub growing_folders: Vec<FolderGrowthDiff>,
+    pub reclaimed_folders: Vec<FolderGrowthDiff>,
+}
+
+#[tauri::command]
+pub fn compare_scans(
+    baseline_scan_id: String,
+    current_scan_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<ScanGrowthComparison> {
+    let scans = state.scans()?;
+    let baseline_entry = scans
+        .get(&baseline_scan_id)
+        .ok_or_else(|| AppError::NotFound(format!("Baseline scan {baseline_scan_id} not found.")))?;
+    let current_entry = scans
+        .get(&current_scan_id)
+        .ok_or_else(|| AppError::NotFound(format!("Current scan {current_scan_id} not found.")))?;
+
+    let baseline_idx = baseline_entry.index.as_ref().ok_or_else(|| AppError::NotFound("Baseline scan still in progress".into()))?.read().unwrap();
+    let current_idx = current_entry.index.as_ref().ok_or_else(|| AppError::NotFound("Current scan still in progress".into()))?.read().unwrap();
+
+    let bytes_delta = (current_idx.total_bytes() as i64) - (baseline_idx.total_bytes() as i64);
+    let files_delta = (current_idx.total_files() as i64) - (baseline_idx.total_files() as i64);
+    let folders_delta = (current_idx.total_folders() as i64) - (baseline_idx.total_folders() as i64);
+
+    let mut category_deltas: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for file in &current_idx.files {
+        let cat = crate::filesystem::classify(&file.path, false);
+        *category_deltas.entry(cat).or_insert(0) += file.size as i64;
+    }
+    for file in &baseline_idx.files {
+        let cat = crate::filesystem::classify(&file.path, false);
+        *category_deltas.entry(cat).or_insert(0) -= file.size as i64;
+    }
+
+    let mut growing_folders: Vec<FolderGrowthDiff> = Vec::new();
+    let mut reclaimed_folders: Vec<FolderGrowthDiff> = Vec::new();
+
+    let mut baseline_dirs: std::collections::HashMap<std::path::PathBuf, (String, u64)> = std::collections::HashMap::new();
+    for (pos, dir) in baseline_idx.directories.iter().enumerate() {
+        let size = baseline_idx.aggregates[pos].size_bytes;
+        baseline_dirs.insert(dir.path.clone(), (dir.name.clone(), size));
+    }
+
+    for (pos, dir) in current_idx.directories.iter().enumerate() {
+        let cur_size = current_idx.aggregates[pos].size_bytes;
+        if let Some((_, base_size)) = baseline_dirs.get(&dir.path) {
+            let delta = (cur_size as i64) - (*base_size as i64);
+            if delta > 1024 * 1024 {
+                growing_folders.push(FolderGrowthDiff {
+                    path: dir.path.to_string_lossy().to_string(),
+                    name: dir.name.clone(),
+                    baseline_bytes: *base_size,
+                    current_bytes: cur_size,
+                    delta_bytes: delta,
+                });
+            } else if delta < -(1024 * 1024) {
+                reclaimed_folders.push(FolderGrowthDiff {
+                    path: dir.path.to_string_lossy().to_string(),
+                    name: dir.name.clone(),
+                    baseline_bytes: *base_size,
+                    current_bytes: cur_size,
+                    delta_bytes: delta,
+                });
+            }
+        }
+    }
+
+    growing_folders.sort_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
+    reclaimed_folders.sort_by(|a, b| a.delta_bytes.cmp(&b.delta_bytes));
+    growing_folders.truncate(10);
+    reclaimed_folders.truncate(10);
+
+    Ok(ScanGrowthComparison {
+        baseline_scan_id,
+        current_scan_id,
+        baseline_started_at: baseline_entry.started_at,
+        current_started_at: current_entry.started_at,
+        baseline_root: baseline_entry.root_path.clone(),
+        current_root: current_entry.root_path.clone(),
+        bytes_delta,
+        files_delta,
+        folders_delta,
+        category_deltas,
+        growing_folders,
+        reclaimed_folders,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
