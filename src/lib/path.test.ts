@@ -174,3 +174,12 @@ describe('breadcrumbs', () => {
     expect(crumbs.map((c) => c.path)).toEqual(['/', '/home', '/home/user', '/home/user/diskora']);
   });
 });
+
+describe('shownPath', () => {
+  it('shows the masked display string when the backend provides one, and the path otherwise', async () => {
+    const { shownPath } = await import('./path');
+    expect(shownPath({ path: 'ref:abc', displayPath: 'C:\\...\\clip.mp4' })).toBe('C:\\...\\clip.mp4');
+    expect(shownPath({ path: 'C:\\Users\\bob\\clip.mp4' })).toBe('C:\\Users\\bob\\clip.mp4');
+    expect(shownPath({ path: 'C:\\x', displayPath: null })).toBe('C:\\x');
+  });
+});

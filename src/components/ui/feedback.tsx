@@ -34,11 +34,15 @@ export function Modal({
   width?: string;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Keep the latest close handler without re-running the focus setup on every render. Re-running it
+  // would pull focus back to the first control on each keystroke inside the dialog.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
       if (event.key === 'Tab' && dialogRef.current) {
         // Trap focus inside the dialog.
         const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
@@ -59,7 +63,7 @@ export function Modal({
     document.addEventListener('keydown', onKeyDown);
     dialogRef.current?.querySelector<HTMLElement>('button, input')?.focus();
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
