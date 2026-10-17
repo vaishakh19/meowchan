@@ -2,7 +2,7 @@
 
 ## Windows CI result
 
-The Windows workflow passed on a `windows-2022` runner for source commit `a5ca309`; the CI job then delivered its generated binaries to the session branch as commit `4cb8e81`. See [run 39031447966](https://github.com/vaishakh19/meowchan/actions/runs/39031447966).
+The Windows workflow passed on a `windows-2022` runner for source commit `a5ca309` and again for follow-up commit `5b5c593`; the latest run delivered regenerated binaries to the session branch as commit `7cbdf7b`. See [run 39032365848](https://github.com/vaishakh19/meowchan/actions/runs/39032365848) and [the matching PR run 39032368745](https://github.com/vaishakh19/meowchan/actions/runs/39032368745).
 
 Passed steps included:
 
@@ -13,7 +13,7 @@ Passed steps included:
 - Smoke test of the actual WebView2 application with real on-disk files.
 - Installer install/run/uninstall checks on the CI runner.
 
-The generated files in `release/` are **7,279,104 bytes** (`Diskora.exe`) and **2,761,707 bytes** (`Diskora-setup.exe`). `sha256sum -c release/SHA256SUMS.txt` passes locally for the current files. The initial CI checksum writer joined both entries onto one line; that was corrected in the follow-up workflow change, which also validates the manifest has exactly one correct line per binary. That follow-up check is pending its next CI run.
+The generated files in `release/` are **7,279,104 bytes** (`Diskora.exe`) and **2,762,126 bytes** (`Diskora-setup.exe`). `sha256sum -c release/SHA256SUMS.txt` passes locally for these files. The initial CI checksum writer joined both entries onto one line; the follow-up workflow fixed it and validates the manifest has exactly one correct line per binary. That validation passed in run `39032365848`.
 
 The first CI attempt caught an ownership error in the new duplicate-report test; it was fixed in `a5ca309`. The passing run above is the subsequent run.
 
