@@ -8,38 +8,14 @@
 
 import type { TreeNode } from '@/types/contracts';
 import { useMemo, useState } from 'react';
-import {
-  ChevronRight,
-  Clock,
-  Crosshair,
-  Download,
-  FolderTree,
-  LayoutGrid,
-  List,
-  PieChart,
-  RotateCcw,
-  Search,
-  ShieldAlert,
-  Users,
-  ZoomIn,
-} from 'lucide-react';
+import { ChevronRight, Clock, Crosshair, Download, FolderTree, LayoutGrid, List, PieChart, RotateCcw, Search, ShieldAlert, Users, ZoomIn, Lock } from 'lucide-react';
 import { useItemMenu } from '@/app/itemMenu';
 import { useApp, useFocusNode } from '@/app/state';
 import { Sunburst } from '@/features/visualization/Sunburst';
 import { Treemap } from '@/features/visualization/Treemap';
 import { FileList } from '@/features/visualization/FileList';
 import { UserStorageView } from '@/features/scanner/UserStorageView';
-import {
-  Badge,
-  Button,
-  EmptyState,
-  ErrorState,
-  Panel,
-  ProgressBar,
-  SegmentedControl,
-  Spinner,
-  cx,
-} from '@/components/ui/primitives';
+import { Badge, Button, EmptyState, ErrorState, Panel, ProgressBar, SegmentedControl, Spinner, cx, ProBadge } from '@/components/ui/primitives';
 import { formatBytes, formatCount, formatDateTime, formatDuration, formatPercent } from '@/lib/format';
 import { categoryBreakdown } from '@/features/visualization/layout';
 import { categoryColor, categoryLabel } from '@/lib/categories';
@@ -76,6 +52,11 @@ export function AnalyzeView(): React.JSX.Element {
 
   const handleExportCsv = async () => {
     if (!result) return;
+    // The CSV holds real paths, so it is a Pro feature. Locked, it explains itself instead.
+    if (!proEnabled) {
+      actions.promptUpgrade('CSV export with full paths');
+      return;
+    }
     setExporting(true);
     try {
       const transport = await import('@/lib/transport').then((m) => m.getTransport());
@@ -259,10 +240,12 @@ export function AnalyzeView(): React.JSX.Element {
             variant="secondary"
             onClick={() => void handleExportCsv()}
             disabled={exporting}
-            title="Export scan results to CSV"
+            title={proEnabled ? 'Export scan results to CSV' : 'CSV export with full paths is a Diskora Pro feature'}
           >
             <Download aria-hidden className="size-3" />
             {exporting ? 'Exporting…' : 'Export CSV'}
+            {!proEnabled ? <Lock aria-hidden className="size-3" /> : null}
+            {!proEnabled ? <ProBadge /> : null}
           </Button>
           {result.prunedNodes > 0 ? (
             <Badge tone="warn" className="mr-1">

@@ -89,7 +89,11 @@ try {
   await until(() => click('Scan a folder…'), 'folder scan button');
   await until(() => evaluate('window.__diskoraPickerIntercepted === true'), 'intercepted folder picker');
   await until(() => evaluate(`!!document.querySelector('[data-testid="analyzed-size"]')`), 'completed scan in UI');
-  const summary = await evaluate(`window.__TAURI_INTERNALS__.invoke('scan_list').then(rows => rows.find(row => row.rootPath === ${JSON.stringify(fixture)}))`);
+  // This build has no Pro licence, so the backend must hand out identity tokens and masked paths only.
+  // The newest scan is the one that just completed.
+  const summary = await evaluate(`window.__TAURI_INTERNALS__.invoke('scan_list').then(rows => rows[0])`);
+  assert.ok(summary && String(summary.rootPath).startsWith('ref:'), 'free tier must receive an identity token, not the real root path');
+  assert.equal(await evaluate(`window.__TAURI_INTERNALS__.invoke('scan_list').then(rows => JSON.stringify(rows).includes(${JSON.stringify(fixture)}))`), false, 'real path leaked through scan_list');
   assert.equal(summary.totalBytes, 3 * 1024 * 1024 + 11);
   assert.equal(summary.fileCount, 4);
   assert.equal(summary.folderCount, 1);
@@ -107,6 +111,7 @@ try {
   await evaluate(`([...document.querySelectorAll('button')].find(button => button.textContent.includes('2 copies ·'))).click()`);
   await until(() => evaluate(`document.body.textContent.includes('a.bin') && document.body.textContent.includes('b.bin')`), 'duplicate paths');
   assert.equal(await evaluate(`document.querySelector('[data-testid="duplicates-view"]').textContent.includes('c.bin')`), false);
+  assert.equal(await evaluate(`document.body.innerText.includes(${JSON.stringify(fixture)})`), false, 'real path leaked into the UI');
   assert.equal(errors.length, 0, JSON.stringify(errors));
   console.log('PASS: renamed executable launched outside the build tree; real UI scanned 4 files including a Unicode folder, reported exact totals and found 2 content-identical copies (not the equal-sized different file).');
 } catch (error) {
