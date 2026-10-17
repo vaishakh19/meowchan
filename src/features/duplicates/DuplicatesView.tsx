@@ -26,7 +26,7 @@ import {
   cx,
 } from '@/components/ui/primitives';
 import { formatBytes, formatCount, formatDateTime, formatRelativeTime } from '@/lib/format';
-import type { DuplicateGroup } from '@/types/contracts';
+import type { DuplicateGroup, DuplicateVerifyResult } from '@/types/contracts';
 
 const MB = 1024 * 1024;
 
@@ -86,20 +86,30 @@ export function DuplicatesView(): React.JSX.Element {
       </div>
 
       {/* ------------------------------ progress ------------------------------ */}
-      {duplicates.loading && duplicates.progress ? (
+      {duplicates.loading ? (
         <div className="border-b border-line bg-surface px-3 py-2">
-          <ProgressBar
-            value={
-              duplicates.progress.etaMs && duplicates.progress.elapsedMs > 0
-                ? Math.min(1, duplicates.progress.elapsedMs / (duplicates.progress.elapsedMs + duplicates.progress.etaMs))
-                : 0
-            }
-            label="Duplicate scan progress"
-          />
-          <p className="dw-tnum mt-1 text-[10px] text-ink-muted">
-            {duplicates.progress.phase} · {formatCount(duplicates.progress.filesHashed)} files hashed ·{' '}
-            {formatBytes(duplicates.progress.bytesHashed)} read
-          </p>
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <ProgressBar
+                value={
+                  duplicates.progress?.etaMs && duplicates.progress.elapsedMs > 0
+                    ? Math.min(1, duplicates.progress.elapsedMs / (duplicates.progress.elapsedMs + duplicates.progress.etaMs))
+                    : 0
+                }
+                label="Duplicate scan progress"
+              />
+              <p className="dw-tnum mt-1 text-[10px] text-ink-muted">
+                {duplicates.progress?.phase ?? 'Starting'} · {formatCount(duplicates.progress?.filesHashed ?? 0)} files hashed ·{' '}
+                {formatBytes(duplicates.progress?.bytesHashed ?? 0)} read ·{' '}
+                {formatCount(duplicates.progress?.candidateGroups ?? 0)} candidate groups
+              </p>
+            </div>
+            {duplicates.currentReportId ? (
+              <Button variant="secondary" size="sm" disabled={duplicates.cancelling} onClick={() => void actions.cancelDuplicateScan()}>
+                {duplicates.cancelling ? 'Cancelling…' : 'Cancel'}
+              </Button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -117,8 +127,23 @@ export function DuplicatesView(): React.JSX.Element {
       ) : report.totalGroups === 0 ? (
         <EmptyState
           icon={<ShieldCheck aria-hidden className="size-6" />}
-          title="No duplicates found"
-          detail={`${formatCount(report.filesHashed)} files were hashed (${formatBytes(report.hashedBytes)} read) and no two of them matched.`}
+          title={
+            report.status === 'cancelled'
+              ? 'Duplicate scan cancelled'
+              : report.status === 'partial' || report.status === 'error'
+                ? 'Duplicate scan incomplete'
+                : 'No duplicates found'
+          }
+          detail={[
+            `${formatCount(report.filesHashed)} files were hashed (${formatBytes(report.hashedBytes)} read).`,
+            report.status === 'complete' ? 'No two readable files matched.' : `Status: ${report.status}.`,
+            report.skippedLargeFiles > 0
+              ? `${formatCount(report.skippedLargeFiles)} files larger than 5 GiB were skipped (${formatBytes(report.skippedLargeBytes)}).`
+              : null,
+            report.errors.length > 0 ? `${formatCount(report.errors.length)} file read errors were recorded.` : null,
+          ]
+            .filter(Boolean)
+            .join(' ')}
         />
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
@@ -127,19 +152,28 @@ export function DuplicatesView(): React.JSX.Element {
             <Stat label="Duplicate copies" value={formatCount(report.totalCopies)} />
             <Stat label="Reclaimable" value={formatBytes(report.totalReclaimableBytes)} strong />
             <Stat label="Algorithm" value={report.algorithm.toUpperCase()} />
+            <Stat label="Candidate groups" value={formatCount(report.candidateGroups)} />
             <Stat label="Hashed" value={`${formatCount(report.filesHashed)} files · ${formatBytes(report.hashedBytes)}`} />
-            {report.errors.length > 0 ? <Stat label="Unreadable" value={formatCount(report.errors.length)} /> : null}
+            {report.status !== 'complete' ? <Stat label="Status" value={report.status} /> : null}
+            {report.skippedLargeFiles > 0 ? (
+              <Stat
+                label="Skipped >5 GiB"
+                value={`${formatCount(report.skippedLargeFiles)} files · ${formatBytes(report.skippedLargeBytes)}`}
+              />
+            ) : null}
+            {report.errors.length > 0 ? <Stat label="Read errors" value={formatCount(report.errors.length)} /> : null}
           </Panel>
 
           <ul className="flex flex-col gap-2">
             {report.groups.map((group) => (
               <GroupCard
-                key={group.groupId}
+                key={`${report.reportId}:${group.groupId}`}
                 group={group}
                 expanded={expanded === group.groupId}
                 onToggle={() => setExpanded(expanded === group.groupId ? null : group.groupId)}
                 onReveal={(path) => void actions.reveal(path)}
                 onExclude={(path) => actions.excludeDuplicatePath(path)}
+                onVerify={(pathA, pathB) => actions.verifyDuplicateFiles(pathA, pathB)}
                 onContextMenu={(path, x, y) => itemMenu.open(path, x, y, 'file')}
               />
             ))}
@@ -181,6 +215,7 @@ function GroupCard({
   onToggle,
   onReveal,
   onExclude,
+  onVerify,
   onContextMenu,
 }: {
   group: DuplicateGroup;
@@ -188,29 +223,74 @@ function GroupCard({
   onToggle: () => void;
   onReveal: (path: string) => void;
   onExclude: (path: string) => void;
+  onVerify: (pathA: string, pathB: string) => Promise<DuplicateVerifyResult>;
   onContextMenu: (path: string, x: number, y: number) => void;
 }): React.JSX.Element {
+  const [verification, setVerification] = useState<'idle' | 'running' | 'verified' | 'mismatch' | 'error'>('idle');
+  const [verificationMessage, setVerificationMessage] = useState('');
+
+  const verifyCopies = async () => {
+    if (verification === 'running' || group.copies.length < 2) return;
+    setVerification('running');
+    setVerificationMessage('');
+    try {
+      const reference = group.copies[0];
+      for (const copy of group.copies.slice(1)) {
+        const result = await onVerify(reference.path, copy.path);
+        if (!result.equal) {
+          setVerification('mismatch');
+          setVerificationMessage(
+            `Files changed since the report; the first mismatch is at byte ${result.firstDifferenceOffset ?? result.bytesCompared}. Rerun detection.`,
+          );
+          return;
+        }
+      }
+      setVerification('verified');
+      setVerificationMessage('Every copy was compared byte-for-byte with the suggested original.');
+    } catch (cause) {
+      setVerification('error');
+      setVerificationMessage(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const byteVerified = verification === 'verified';
 
   return (
     <li>
       <Panel className="overflow-hidden">
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          className="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-surface-sunken"
-        >
-          <Badge tone={group.confidence === 'verified' ? 'ok' : 'neutral'}>
-            {group.confidence === 'verified' ? 'byte-verified' : 'hash match'}
-          </Badge>
-          <span className="dw-tnum text-[12px] font-semibold text-ink">
-            {group.copies.length} copies · {formatBytes(group.sizeBytes)} each
-          </span>
-          <span className="dw-tnum ml-auto text-[12px] font-medium text-ink">
-            {formatBytes(group.reclaimableBytes)} reclaimable
-          </span>
-          <span className="text-[10px] text-ink-faint">{expanded ? 'Hide' : 'Details'}</span>
-        </button>
+        <div className="flex items-center gap-1 border-b border-line px-2.5 py-1.5">
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-1 text-left transition-colors hover:bg-surface-sunken"
+          >
+            <Badge tone={byteVerified ? 'ok' : 'neutral'}>
+              {byteVerified ? 'byte-verified' : 'hash match'}
+            </Badge>
+            <span className="dw-tnum text-[12px] font-semibold text-ink">
+              {group.copies.length} copies · {formatBytes(group.sizeBytes)} each
+            </span>
+            <span className="dw-tnum ml-auto text-[12px] font-medium text-ink">
+              {formatBytes(group.reclaimableBytes)} reclaimable
+            </span>
+            <span className="text-[10px] text-ink-faint">{expanded ? 'Hide' : 'Details'}</span>
+          </button>
+          <Button size="sm" variant="secondary" disabled={verification === 'running'} onClick={() => void verifyCopies()}>
+            {verification === 'running' ? 'Verifying…' : byteVerified ? 'Verify again' : 'Verify bytes'}
+          </Button>
+        </div>
+        {verificationMessage ? (
+          <p
+            role="status"
+            className={cx(
+              'border-b border-line px-3 py-1 text-[10px]',
+              verification === 'verified' ? 'text-success' : verification === 'running' ? 'text-ink-muted' : 'text-danger',
+            )}
+          >
+            {verificationMessage}
+          </p>
+        ) : null}
 
         {expanded ? (
           <div className="border-t border-line">
@@ -240,7 +320,7 @@ function GroupCard({
                         <p className="text-[9px] text-ink-faint">
                           {copy.name}
                           {copy.isSuggestedOriginal ? ' · suggested original' : ''}
-                          {copy.byteVerified ? ' · verified identical' : ''}
+                          {byteVerified ? ' · verified identical' : ''}
                         </p>
                       </td>
                       <td

@@ -262,8 +262,9 @@ export function ProView(): React.JSX.Element {
             <p className="mt-2 text-[10px] leading-relaxed text-ink-faint">
               Purchases are re-verified with Dodo Payments. If this device
               loses its connection, Pro keeps working for a short grace
-              period. Keys are limited to a small number of devices; restore
-              here after a reinstall.
+              period. Restore rechecks a saved entitlement on this Windows
+              profile. If app data was cleared or you changed devices, paste
+              your emailed key and activate it again.
             </p>
           </Panel>
         ) : null}

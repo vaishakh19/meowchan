@@ -133,9 +133,7 @@ pub fn privacy_report(state: State<'_, AppState>) -> AppResult<PrivacyReport> {
     let mut network_activity = Vec::new();
     if crate::licensing::is_configured() {
         network_activity.push(
-            "Diskora Pro only: license activation and validation calls to Dodo Payments \
-             (the payment provider). Only the license key and a device name are sent — \
-             never file names, paths or contents.".to_string(),
+            "Diskora Pro only: license activation and validation calls to Dodo Payments. The license key, activation instance ID and device label may be sent for licensing; never file names, paths or contents.".to_string(),
         );
     }
     let mut local_storage = vec![
@@ -143,8 +141,7 @@ pub fn privacy_report(state: State<'_, AppState>) -> AppResult<PrivacyReport> {
     ];
     if crate::licensing::is_configured() {
         local_storage.push(
-            "When you buy Diskora Pro: the license key, activation instance and \
-             verification timestamps, stored in the local database.".to_string(),
+            "When you buy Diskora Pro: the license key is protected with user-scoped Windows DPAPI before storage; activation instance and verification timestamps stay in the local SQLite entitlement.".to_string(),
         );
     }
 

@@ -25,6 +25,7 @@ jobs:
           cache-on-failure: true
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run lint
       - name: Native tests
         shell: pwsh
         run: |
@@ -90,21 +91,29 @@ jobs:
       # delivered binaries, and the step is a no-op when nothing
       # changed (repeat runs must not fail here).
       - name: Deliver verified binaries to the session branch
-        if: github.ref == 'refs/heads/arena/1d439cf2-meowchan'
+        if: github.ref == 'refs/heads/arena/3f9b31fa-meowchan'
         shell: pwsh
         run: |
           git config user.name "Diskora build"
           git config user.email "diskora-build@users.noreply.github.com"
-          $sums = @(
-            (Get-FileHash release\Diskora-setup.exe -Algorithm SHA256).Hash.ToLower() + "  Diskora-setup.exe",
-            (Get-FileHash release\Diskora.exe -Algorithm SHA256).Hash.ToLower() + "  Diskora.exe"
+          $setupHash = (Get-FileHash release\Diskora-setup.exe -Algorithm SHA256).Hash.ToLower()
+          $exeHash = (Get-FileHash release\Diskora.exe -Algorithm SHA256).Hash.ToLower()
+          $sums = [string[]]@(
+            "$setupHash  Diskora-setup.exe"
+            "$exeHash  Diskora.exe"
           )
-          Set-Content -Path release\SHA256SUMS.txt -Value $sums
+          Set-Content -Path release\SHA256SUMS.txt -Value $sums -Encoding ascii
+          $checksumLines = Get-Content release\SHA256SUMS.txt
+          if ($checksumLines.Count -ne 2 -or
+              $checksumLines[0] -ne "$setupHash  Diskora-setup.exe" -or
+              $checksumLines[1] -ne "$exeHash  Diskora.exe") {
+            throw 'SHA256SUMS.txt must contain one correct SHA-256 line per binary.'
+          }
           git add src-tauri/Cargo.lock
           git add -f release/Diskora.exe release/Diskora-setup.exe release/SHA256SUMS.txt
           if (git diff --cached --quiet) {
             Write-Output "No verified binary changes to deliver."
           } else {
             git commit -m "Deliver Windows build and dependency lock [skip ci]"
-            git push origin HEAD:arena/1d439cf2-meowchan
+            git push origin HEAD:arena/3f9b31fa-meowchan
           }

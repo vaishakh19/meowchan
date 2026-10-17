@@ -52,7 +52,6 @@ function fillCircle(cx, cy, outer, inner, color) {
   const outerSq = outer * outer;
   const innerSq = inner * inner;
   for (let y = minY; y <= maxY; y += 1) {
-    const dy = y - cy;
     const rowStart = Math.max(0, Math.floor(cx - outer));
     const rowEnd = Math.min(SIZE - 1, Math.ceil(cx + outer));
     for (let x = rowStart; x <= rowEnd; x += 1) {

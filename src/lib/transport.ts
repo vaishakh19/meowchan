@@ -4,6 +4,7 @@ import type {
   AppSettings,
   AppVersion,
   ChildrenPage,
+  ChildrenQuery,
   DeleteItemsRequest,
   DeleteOutcome,
   DriveInfo,
@@ -29,8 +30,8 @@ export type Unsubscribe = () => void;
 
 export interface BackendTransport {
   /** Which implementation is active. */
-  readonly kind: 'tauri' | 'demo';
-  /** Short label shown in the status bar, e.g. `Rust backend` / `Browser preview`. */
+  readonly kind: 'tauri';
+  /** Short label shown in the status bar, e.g. `Rust backend`. */
   readonly label: string;
   /**
    * True when the backend can mutate the filesystem. Only the guarded,
@@ -46,7 +47,7 @@ export interface BackendTransport {
   scanCancel(scanId: string): Promise<void>;
   scanGet(scanId: string): Promise<ScanResult | null>;
   scanList(): Promise<ScanSummary[]>;
-  scanChildren(scanId: string, path: string, offset: number, limit: number): Promise<ChildrenPage>;
+  scanChildren(query: ChildrenQuery): Promise<ChildrenPage>;
   scanDelete(scanId: string): Promise<void>;
   userStorageReport(scanId: string): Promise<UserStorageReport>;
   exportScanCsv(request: import('@/types/contracts').CsvExportRequest): Promise<string>;
@@ -73,6 +74,7 @@ export interface BackendTransport {
 
   /* Duplicates */
   findDuplicates(options: DuplicateOptions): Promise<string>;
+  cancelDuplicates(reportId: string): Promise<void>;
   duplicatesGet(reportId: string): Promise<DuplicateReport | null>;
   verifyDuplicates(pathA: string, pathB: string): Promise<DuplicateVerifyResult>;
 
@@ -106,7 +108,7 @@ export async function getTransport(): Promise<BackendTransport> {
     const { createTauriTransport } = await import('./backend/tauriTransport');
     cached = createTauriTransport();
   }
-  if (!cached) throw new Error('Diskora requires its Windows desktop runtime. Build and launch Diskora.exe; a browser cannot scan your disks.');
+  if (!cached) throw new Error('Run inside the desktop app to scan your local disks. A browser cannot access or analyze them.');
   return cached;
 }
 

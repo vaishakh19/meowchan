@@ -8,8 +8,9 @@
 //! `Other (n items)` node, the same node budget. Sizes stay truthful at every level; only the
 //! *granularity* is reduced.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,8 @@ use crate::filesystem::FileRecord;
 pub const DEFAULT_MAX_CHILDREN: usize = 100;
 /// Hard cap on the number of nodes in the returned tree.
 pub const DEFAULT_MAX_NODES: usize = 150_000;
+/// Maximum depth sent to the UI; caps recursive JSON/UI operations on hostile directory chains.
+pub const MAX_TREE_DEPTH: usize = 256;
 /// Path suffix of the synthetic aggregate node. The backend refuses filesystem ops on these.
 pub const OTHER_NODE_SUFFIX: &str = "\\[Other]";
 
@@ -48,21 +51,53 @@ pub struct ScanIndex {
     /// Adjacency list: `children[i]` are the directory indices directly below `i`, biggest first.
     /// Built once so tree construction stays linear in the number of directories.
     children: Vec<Vec<usize>>,
-    /// `parent display path -> indices into files`, biggest first.
-    files_by_parent: HashMap<PathBuf, Vec<usize>>,
+    /// Directory positions for each file parent, biggest first. Each directory is represented by
+    /// its vector position, avoiding a second copy of every path in a million-file index.
+    files_by_parent: Vec<Vec<usize>>,
     /// Directory positions removed after the scan (Recycle Bin deletion).
     /// The tables above are never mutated; removals are an overlay so the
     /// shared `Arc<RwLock<ScanIndex>>` stays cheap to hold while a deletion runs.
     removed_directories: std::collections::HashSet<usize>,
     /// File indices removed after the scan.
     removed_files: std::collections::HashSet<usize>,
+    /// Bounded cache of sorted/filtering indexes for paged directory listings.
+    child_order_cache: Mutex<HashMap<ChildOrderKey, Vec<u64>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EntrySort {
+    Name,
+    Size,
+    Count,
+    Modified,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IndexedEntry {
+    Directory(usize),
+    File(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ChildOrderKey {
+    position: usize,
+    sort: EntrySort,
+    descending: bool,
+    search: String,
 }
 
 impl ScanIndex {
-    /// Builds the index from a walk result.
+    /// Builds the index from a walk result. The command path uses `from_parts` to transfer ownership
+    /// and avoid duplicating the full index; this clone-based helper is useful for tests/callers that
+    /// still need their `ScanRun` afterward.
     pub fn from_run(run: &ScanRun) -> Self {
-        let mut directories = run.directories.clone();
+        Self::from_parts(run.files.clone(), run.directories.clone())
+    }
+
+    /// Builds the index by taking ownership of the walker's records.
+    pub fn from_parts(mut files: Vec<FileRecord>, mut directories: Vec<DirectoryRecord>) -> Self {
         directories.sort_by(|a, b| a.path.cmp(&b.path));
+        files.sort_by(|a, b| a.path.cmp(&b.path));
 
         let mut index: HashMap<PathBuf, usize> = HashMap::with_capacity(directories.len());
         for (position, directory) in directories.iter().enumerate() {
@@ -71,42 +106,51 @@ impl ScanIndex {
 
         // Resolve parent indices now that every directory is in the table.
         for directory in directories.iter_mut() {
-            directory.parent = directory
-                .path
-                .parent()
-                .and_then(|parent| index.get(parent).copied());
+            directory.parent = directory.path.parent().and_then(|parent| index.get(parent).copied());
         }
 
         let mut aggregates = vec![DirectoryAggregate::default(); directories.len()];
+        // `true` means the aggregate includes an exact allocated-size value for every file below
+        // that directory. One unknown file makes the entire directory's value unknown.
+        let mut disk_size_complete = vec![true; directories.len()];
 
-        // Own timestamps per directory.
+        // Own timestamps per directory and start exact disk sums at zero. Unknown file allocation
+        // values permanently mark the directory and its ancestors as unknown below.
         for (position, directory) in directories.iter().enumerate() {
             aggregates[position].modified_at = directory.modified_at;
             aggregates[position].created_at = directory.created_at;
             aggregates[position].access_denied = directory.access_denied;
+            aggregates[position].disk_size_bytes = Some(0);
         }
 
-        // Files roll into their parent directory.
-        let mut files_by_parent: HashMap<PathBuf, Vec<usize>> = HashMap::new();
-        for (position, file) in run.files.iter().enumerate() {
-            files_by_parent
-                .entry(file.parent_path.clone())
-                .or_default()
-                .push(position);
-            if let Some(directory) = index.get(&file.parent_path) {
-                let aggregate = &mut aggregates[*directory];
-                aggregate.size_bytes += file.size;
-                aggregate.disk_size_bytes =
-                    Some(aggregate.disk_size_bytes.unwrap_or(0) + file.disk_size.unwrap_or(file.size));
-                aggregate.file_count += 1;
+        let mut files_by_parent: Vec<Vec<usize>> = vec![Vec::new(); directories.len()];
+        for (position, file) in files.iter().enumerate() {
+            let parent = file.path.parent().and_then(|parent| index.get(parent).copied());
+            if let Some(directory) = parent {
+                files_by_parent[directory].push(position);
+                let aggregate = &mut aggregates[directory];
+                aggregate.size_bytes = aggregate.size_bytes.saturating_add(file.size);
+                aggregate.file_count = aggregate.file_count.saturating_add(1);
+                match (disk_size_complete[directory], file.disk_size) {
+                    (true, Some(disk_size)) => {
+                        aggregate.disk_size_bytes = Some(
+                            aggregate.disk_size_bytes.unwrap_or(0).saturating_add(disk_size),
+                        );
+                    }
+                    (true, None) => {
+                        disk_size_complete[directory] = false;
+                        aggregate.disk_size_bytes = None;
+                    }
+                    (false, _) => {}
+                }
             }
         }
-        for entries in files_by_parent.values_mut() {
+        for entries in files_by_parent.iter_mut() {
             entries.sort_by(|a, b| {
-                run.files[*b]
+                files[*b]
                     .size
-                    .cmp(&run.files[*a].size)
-                    .then_with(|| run.files[*a].path.cmp(&run.files[*b].path))
+                    .cmp(&files[*a].size)
+                    .then_with(|| files[*a].path.cmp(&files[*b].path))
             });
         }
 
@@ -114,16 +158,32 @@ impl ScanIndex {
         let mut order: Vec<usize> = (0..directories.len()).collect();
         order.sort_by(|a, b| directories[*b].depth.cmp(&directories[*a].depth));
         for position in order {
-            let (size, files, folders, disk) = {
+            let (size, files, folders, disk, disk_complete) = {
                 let aggregate = &aggregates[position];
-                (aggregate.size_bytes, aggregate.file_count, aggregate.folder_count, aggregate.disk_size_bytes)
+                (
+                    aggregate.size_bytes,
+                    aggregate.file_count,
+                    aggregate.folder_count,
+                    aggregate.disk_size_bytes,
+                    disk_size_complete[position],
+                )
             };
             if let Some(parent) = directories[position].parent {
                 let parent_aggregate = &mut aggregates[parent];
-                parent_aggregate.size_bytes += size;
-                parent_aggregate.disk_size_bytes = Some(parent_aggregate.disk_size_bytes.unwrap_or(0) + disk.unwrap_or(size));
-                parent_aggregate.file_count += files;
-                parent_aggregate.folder_count += folders + 1;
+                parent_aggregate.size_bytes = parent_aggregate.size_bytes.saturating_add(size);
+                parent_aggregate.file_count = parent_aggregate.file_count.saturating_add(files);
+                parent_aggregate.folder_count = parent_aggregate
+                    .folder_count
+                    .saturating_add(folders.saturating_add(1));
+                if disk_size_complete[parent] && disk_complete {
+                    parent_aggregate.disk_size_bytes = Some(
+                        parent_aggregate.disk_size_bytes.unwrap_or(0)
+                            .saturating_add(disk.unwrap_or(0)),
+                    );
+                } else {
+                    disk_size_complete[parent] = false;
+                    parent_aggregate.disk_size_bytes = None;
+                }
             }
         }
 
@@ -146,37 +206,38 @@ impl ScanIndex {
         ScanIndex {
             directories,
             aggregates,
-            files: run.files.clone(),
+            files,
             index,
             children,
             files_by_parent,
             removed_directories: std::collections::HashSet::new(),
             removed_files: std::collections::HashSet::new(),
+            child_order_cache: Mutex::new(HashMap::new()),
         }
     }
 
     pub fn directory_count(&self) -> usize {
-        self.directories.len() - self.removed_directories.len()
+        self.directories.len().saturating_sub(self.removed_directories.len())
     }
 
     pub fn file_count(&self) -> usize {
-        self.files.len() - self.removed_files.len()
+        self.files.len().saturating_sub(self.removed_files.len())
     }
 
     pub fn total_bytes(&self) -> u64 {
-        self.aggregates.first().map(|a| a.size_bytes).unwrap_or(0)
+        self.aggregates.first().map(|aggregate| aggregate.size_bytes).unwrap_or(0)
     }
 
     pub fn total_disk_bytes(&self) -> Option<u64> {
-        self.aggregates.first().and_then(|a| a.disk_size_bytes)
+        self.aggregates.first().and_then(|aggregate| aggregate.disk_size_bytes)
     }
 
     pub fn total_files(&self) -> u64 {
-        self.aggregates.first().map(|a| a.file_count).unwrap_or(0)
+        self.aggregates.first().map(|aggregate| aggregate.file_count).unwrap_or(0)
     }
 
     pub fn total_folders(&self) -> u64 {
-        self.aggregates.first().map(|a| a.folder_count).unwrap_or(0)
+        self.aggregates.first().map(|aggregate| aggregate.folder_count).unwrap_or(0)
     }
 
     pub fn position_of(&self, path: &Path) -> Option<usize> {
@@ -187,8 +248,7 @@ impl ScanIndex {
         Some(position)
     }
 
-    /// Direct children of a directory, biggest first, minus anything
-    /// deleted since the scan.
+    /// Direct children of a directory, biggest first, minus anything deleted since the scan.
     pub fn children_of(&self, position: usize) -> Vec<usize> {
         self.children
             .get(position)
@@ -201,42 +261,192 @@ impl ScanIndex {
             .unwrap_or_default()
     }
 
-    /// Files whose parent is `position`, biggest first, minus anything
-    /// deleted since the scan.
+    /// Files whose parent is `position`, biggest first, minus anything deleted since the scan.
     pub fn files_of(&self, position: usize) -> Vec<&FileRecord> {
-        let target = &self.directories[position].path;
         self.files_by_parent
-            .get(target)
+            .get(position)
             .map(|entries| {
                 entries
                     .iter()
                     .copied()
                     .filter(|file| !self.removed_files.contains(file))
-                    .map(|index| &self.files[index])
+                    .map(|file| &self.files[file])
                     .collect()
             })
             .unwrap_or_default()
     }
 
+    /// Iterates files that remain present in the post-deletion overlay.
+    pub fn active_files(&self) -> impl Iterator<Item = &FileRecord> + '_ {
+        self.files
+            .iter()
+            .enumerate()
+            .filter_map(|(position, file)| (!self.removed_files.contains(&position)).then_some(file))
+    }
+
+    /// Returns a bounded page of direct children in a stable, requested order. The sorted index is
+    /// cached for up to eight query variants so scrolling does not repeatedly sort a million rows.
+    pub fn children_page(
+        &self,
+        position: usize,
+        offset: usize,
+        limit: usize,
+        sort: EntrySort,
+        descending: bool,
+        search: &str,
+    ) -> Option<(usize, Vec<IndexedEntry>)> {
+        if position >= self.directories.len() {
+            return None;
+        }
+        let normalized_search = search.trim().to_lowercase();
+        let key = ChildOrderKey {
+            position,
+            sort,
+            descending,
+            search: normalized_search.clone(),
+        };
+        let mut cache = self.child_order_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !cache.contains_key(&key) {
+            let order = self.build_child_order(position, sort, descending, &normalized_search);
+            if cache.len() >= 8 {
+                if let Some(oldest) = cache.keys().next().cloned() {
+                    cache.remove(&oldest);
+                }
+            }
+            cache.insert(key.clone(), order);
+        }
+        let order = cache.get(&key)?;
+        let total = order.len();
+        let page = order
+            .iter()
+            .skip(offset.min(total))
+            .take(limit.min(1000))
+            .copied()
+            .map(|encoded| {
+                let position = (encoded >> 1) as usize;
+                if encoded & 1 == 1 {
+                    IndexedEntry::Directory(position)
+                } else {
+                    IndexedEntry::File(position)
+                }
+            })
+            .collect();
+        Some((total, page))
+    }
+
+    fn build_child_order(
+        &self,
+        position: usize,
+        sort: EntrySort,
+        descending: bool,
+        search: &str,
+    ) -> Vec<u64> {
+        let mut order = Vec::new();
+        if let Some(children) = self.children.get(position) {
+            for child in children.iter().copied() {
+                if !self.removed_directories.contains(&child)
+                    && self.entry_matches((child as u64) << 1 | 1, search)
+                {
+                    order.push((child as u64) << 1 | 1);
+                }
+            }
+        }
+        if let Some(files) = self.files_by_parent.get(position) {
+            for file in files.iter().copied() {
+                if !self.removed_files.contains(&file)
+                    && self.entry_matches((file as u64) << 1, search)
+                {
+                    order.push((file as u64) << 1);
+                }
+            }
+        }
+        order.sort_by(|left, right| {
+            let mut comparison = match sort {
+                EntrySort::Name => self.entry_name(*left).to_lowercase().cmp(&self.entry_name(*right).to_lowercase()),
+                EntrySort::Size => self.entry_size(*left).cmp(&self.entry_size(*right)),
+                EntrySort::Count => self.entry_count(*left).cmp(&self.entry_count(*right)),
+                EntrySort::Modified => self.entry_modified(*left).cmp(&self.entry_modified(*right)),
+            };
+            if descending {
+                comparison = comparison.reverse();
+            }
+            comparison.then_with(|| self.entry_path(*left).cmp(self.entry_path(*right)))
+        });
+        order
+    }
+
+    fn entry_matches(&self, encoded: u64, search: &str) -> bool {
+        search.is_empty() || self.entry_name(encoded).to_lowercase().contains(search)
+    }
+
+    fn entry_name(&self, encoded: u64) -> &str {
+        let position = (encoded >> 1) as usize;
+        if encoded & 1 == 1 {
+            self.directories.get(position).map(|entry| entry.name.as_str()).unwrap_or("")
+        } else {
+            self.files.get(position).map(|entry| entry.name.as_str()).unwrap_or("")
+        }
+    }
+
+    fn entry_size(&self, encoded: u64) -> u64 {
+        let position = (encoded >> 1) as usize;
+        if encoded & 1 == 1 {
+            self.aggregates.get(position).map(|aggregate| aggregate.size_bytes).unwrap_or(0)
+        } else {
+            self.files.get(position).map(|file| file.size).unwrap_or(0)
+        }
+    }
+
+    fn entry_count(&self, encoded: u64) -> u64 {
+        let position = (encoded >> 1) as usize;
+        if encoded & 1 == 1 {
+            self.aggregates.get(position).map(|aggregate| aggregate.file_count).unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    fn entry_modified(&self, encoded: u64) -> Option<i64> {
+        let position = (encoded >> 1) as usize;
+        if encoded & 1 == 1 {
+            self.directories.get(position).and_then(|entry| entry.modified_at)
+        } else {
+            self.files.get(position).and_then(|file| file.modified_at)
+        }
+    }
+
+    fn entry_path(&self, encoded: u64) -> &Path {
+        let position = (encoded >> 1) as usize;
+        if encoded & 1 == 1 {
+            self.directories.get(position).map(|entry| entry.path.as_path()).unwrap_or_else(|| Path::new(""))
+        } else {
+            self.files.get(position).map(|file| file.path.as_path()).unwrap_or_else(|| Path::new(""))
+        }
+    }
+
     /* ------------------------- post-scan deletion ------------------------- */
 
-    /// Removes a file or folder (and, for folders, everything inside it) from
-    /// the in-memory index, subtracting its totals from every ancestor.
-    /// Returns `false` when the path is not part of this scan or was already
-    /// removed — callers treat that as "nothing to refresh".
+    /// Removes a file or folder (and, for folders, everything inside it) from the in-memory index,
+    /// subtracting its totals from every ancestor.
+    /// Returns `false` when the path is not part of this scan or was already removed.
     pub fn remove(&mut self, path: &Path) -> bool {
-        if let Some(position) = self.index.get(path).copied() {
+        let removed = if let Some(position) = self.index.get(path).copied() {
             self.remove_directory(position)
         } else {
             self.remove_file(path)
+        };
+        if removed {
+            if let Ok(mut cache) = self.child_order_cache.lock() {
+                cache.clear();
+            }
         }
+        removed
     }
 
     fn remove_directory(&mut self, position: usize) -> bool {
         if !self.removed_directories.insert(position) {
-            return false; // already removed
+            return false;
         }
-        // Everything below the folder goes with it.
         let mut stack = vec![position];
         while let Some(current) = stack.pop() {
             for child in self.children[current].iter().copied() {
@@ -244,24 +454,20 @@ impl ScanIndex {
                     stack.push(child);
                 }
             }
-            if let Some(files) = self.files_by_parent.get(&self.directories[current].path) {
+            if let Some(files) = self.files_by_parent.get(current) {
                 for file in files.iter().copied() {
                     self.removed_files.insert(file);
                 }
             }
         }
-        // Ancestors lose the whole subtree's rollup.
         let lost = self.aggregates[position].clone();
         let mut ancestor = self.directories[position].parent;
         while let Some(parent) = ancestor {
             let aggregate = &mut self.aggregates[parent];
             aggregate.size_bytes = aggregate.size_bytes.saturating_sub(lost.size_bytes);
             aggregate.file_count = aggregate.file_count.saturating_sub(lost.file_count);
-            aggregate.folder_count =
-                aggregate.folder_count.saturating_sub(lost.folder_count + 1);
-            if let (Some(disk), Some(lost_disk)) =
-                (aggregate.disk_size_bytes, lost.disk_size_bytes)
-            {
+            aggregate.folder_count = aggregate.folder_count.saturating_sub(lost.folder_count.saturating_add(1));
+            if let (Some(disk), Some(lost_disk)) = (aggregate.disk_size_bytes, lost.disk_size_bytes) {
                 aggregate.disk_size_bytes = Some(disk.saturating_sub(lost_disk));
             }
             ancestor = self.directories[parent].parent;
@@ -276,13 +482,10 @@ impl ScanIndex {
         let Some(position) = self.index.get(parent).copied() else {
             return false;
         };
-        let Some(files) = self.files_by_parent.get(parent) else {
+        let Some(files) = self.files_by_parent.get(position) else {
             return false;
         };
-        let Some(&file) = files
-            .iter()
-            .find(|&&candidate| self.files[candidate].path == path)
-        else {
+        let Some(&file) = files.iter().find(|&&candidate| self.files[candidate].path == path) else {
             return false;
         };
         if !self.removed_files.insert(file) {
@@ -294,9 +497,7 @@ impl ScanIndex {
             let aggregate = &mut self.aggregates[parent_position];
             aggregate.size_bytes = aggregate.size_bytes.saturating_sub(record.size);
             aggregate.file_count = aggregate.file_count.saturating_sub(1);
-            if let (Some(disk), Some(record_disk)) =
-                (aggregate.disk_size_bytes, record.disk_size)
-            {
+            if let (Some(disk), Some(record_disk)) = (aggregate.disk_size_bytes, record.disk_size) {
                 aggregate.disk_size_bytes = Some(disk.saturating_sub(record_disk));
             }
             ancestor = self.directories[parent_position].parent;
@@ -314,10 +515,7 @@ pub struct PruneOptions {
 
 impl Default for PruneOptions {
     fn default() -> Self {
-        PruneOptions {
-            max_children: DEFAULT_MAX_CHILDREN,
-            max_nodes: DEFAULT_MAX_NODES,
-        }
+        PruneOptions { max_children: DEFAULT_MAX_CHILDREN, max_nodes: DEFAULT_MAX_NODES }
     }
 }
 
@@ -358,15 +556,8 @@ pub struct PruneResult {
     pub truncated: bool,
 }
 
-/// Builds the pruned tree for a scan index rooted at `root`.
-///
-/// The depth limit is found with a **binary search**, not a linear walk. `build_limited`'s node count
-/// is monotone non-increasing in `max_depth` — cutting depth can only turn subtrees into leaves — so
-/// the search is sound and costs `O(log depth)` builds instead of `O(depth)`.
-///
-/// This is the same algorithm `pruneTree` in `src/lib/tree.ts` uses, and the two must stay
-/// equivalent: `src/lib/tree.test.ts` asserts the monotonicity the search relies on, and the
-/// benchmark in `src-tauri/src/bin/bench.rs` measures the cost.
+/// Builds a bounded-depth tree for the UI. Depth is capped even when the node budget would allow
+/// a pathological chain, so JSON serialization and downstream visualization stay stack-safe.
 pub fn prune_tree(index: &ScanIndex, root: usize, options: PruneOptions) -> PruneResult {
     if index.directories.get(root).is_none() {
         return PruneResult {
@@ -375,19 +566,23 @@ pub fn prune_tree(index: &ScanIndex, root: usize, options: PruneOptions) -> Prun
                 size_bytes: 0, disk_size_bytes: None, file_count: 0, folder_count: 0,
                 modified_at: None, created_at: None, extension: None, category: "other".into(),
                 access_denied: true, children: Vec::new(), synthetic: true,
+                is_symlink: None, is_junction: None, is_cloud_placeholder: None, cloud_status: None,
             },
             pruned_nodes: 0, truncated: false,
         };
     }
+
     let max_children = options.max_children.max(2);
     let max_nodes = options.max_nodes.max(1);
     let mut low = 0usize;
-    let mut high = index_depth(index, root);
+    let mut high = index_depth(index, root).min(MAX_TREE_DEPTH);
     while low < high {
         let middle = low + (high - low + 1) / 2;
-        let candidate = build_limited(index, root, max_children, middle);
-        if count_nodes(&candidate.tree) <= max_nodes { low = middle; }
-        else { high = middle - 1; }
+        if count_limited_nodes(index, root, max_children, middle) <= max_nodes {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
     }
     finish(build_limited(index, root, max_children, low))
 }
@@ -405,99 +600,171 @@ struct Limited {
     pruned_nodes: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ChildCandidate {
+    Directory(usize),
+    File(usize),
+}
+
+struct BuildPlan {
+    kept: Vec<ChildCandidate>,
+    other: Option<TreeNode>,
+}
+
+enum BuildTask {
+    Directory { position: usize, depth: usize },
+    FinishDirectory(usize),
+}
+
 fn build_limited(index: &ScanIndex, root: usize, max_children: usize, max_depth: usize) -> Limited {
+    let mut nodes: HashMap<usize, TreeNode> = HashMap::new();
+    let mut plans: HashMap<usize, BuildPlan> = HashMap::new();
+    let mut tasks = vec![BuildTask::Directory { position: root, depth: 0 }];
     let mut pruned_nodes = 0usize;
-    let tree = build_node(index, root, 0, max_children, max_depth, &mut pruned_nodes);
+
+    while let Some(task) = tasks.pop() {
+        match task {
+            BuildTask::Directory { position, depth } => {
+                let node = directory_node(index, position);
+                if depth >= max_depth {
+                    pruned_nodes = pruned_nodes
+                        .saturating_add(subtree_size(index, position).saturating_sub(1));
+                    nodes.insert(position, node);
+                    continue;
+                }
+
+                let (kept, other, dropped_nodes) = select_children(index, position, max_children);
+                pruned_nodes = pruned_nodes.saturating_add(dropped_nodes);
+                nodes.insert(position, node);
+                plans.insert(position, BuildPlan { kept: kept.clone(), other });
+                tasks.push(BuildTask::FinishDirectory(position));
+                for candidate in kept.iter().rev() {
+                    if let ChildCandidate::Directory(child) = candidate {
+                        tasks.push(BuildTask::Directory { position: *child, depth: depth + 1 });
+                    }
+                }
+            }
+            BuildTask::FinishDirectory(position) => {
+                let Some(plan) = plans.remove(&position) else { continue };
+                let other_count = if plan.other.is_some() { 1 } else { 0 };
+                let mut children = Vec::with_capacity(plan.kept.len() + other_count);
+                for candidate in plan.kept {
+                    match candidate {
+                        ChildCandidate::Directory(child) => {
+                            if let Some(node) = nodes.remove(&child) {
+                                children.push(node);
+                            }
+                        }
+                        ChildCandidate::File(file) => children.push(file_node(&index.files[file])),
+                    }
+                }
+                if let Some(other) = plan.other {
+                    children.push(other);
+                }
+                if let Some(node) = nodes.get_mut(&position) {
+                    node.children = children;
+                }
+            }
+        }
+    }
+
+    let tree = nodes.remove(&root).unwrap_or_else(|| directory_node(index, root));
     Limited { tree, pruned_nodes }
 }
 
-fn build_node(
+fn count_limited_nodes(index: &ScanIndex, root: usize, max_children: usize, max_depth: usize) -> usize {
+    let mut total = 0usize;
+    let mut stack = vec![(root, 0usize)];
+    while let Some((position, depth)) = stack.pop() {
+        total = total.saturating_add(1);
+        if depth >= max_depth {
+            continue;
+        }
+        let directories = index.children_of(position);
+        let files = direct_file_indices(index, position);
+        if directories.len().saturating_add(files.len()) <= max_children {
+            total = total.saturating_add(files.len());
+            stack.extend(directories.into_iter().map(|child| (child, depth + 1)));
+        } else {
+            total = total.saturating_add(1); // the synthetic Other node
+            let kept = top_candidates(index, &directories, &files, max_children - 1);
+            for candidate in kept {
+                match candidate {
+                    ChildCandidate::Directory(child) => stack.push((child, depth + 1)),
+                    ChildCandidate::File(_) => total = total.saturating_add(1),
+                }
+            }
+        }
+    }
+    total
+}
+
+fn select_children(
     index: &ScanIndex,
     position: usize,
-    depth: usize,
     max_children: usize,
-    max_depth: usize,
-    pruned_nodes: &mut usize,
-) -> TreeNode {
+) -> (Vec<ChildCandidate>, Option<TreeNode>, usize) {
+    let directories = index.children_of(position);
+    let files = direct_file_indices(index, position);
+    let candidate_count = directories.len().saturating_add(files.len());
+    if candidate_count <= max_children {
+        let mut kept = Vec::with_capacity(candidate_count);
+        kept.extend(directories.iter().copied().map(ChildCandidate::Directory));
+        kept.extend(files.iter().copied().map(ChildCandidate::File));
+        return (kept, None, 0);
+    }
+
+    let kept = top_candidates(index, &directories, &files, max_children - 1);
+    let kept_set: HashSet<ChildCandidate> = kept.iter().copied().collect();
+    let mut dropped_entries = 0usize;
+    let mut dropped_nodes = 0usize;
+    let mut dropped_bytes = 0u64;
+    let mut dropped_files = 0u64;
+    let mut dropped_folders = 0u64;
+    let mut disk_bytes = 0u64;
+    let mut disk_complete = true;
+
+    for child in directories {
+        if kept_set.contains(&ChildCandidate::Directory(child)) {
+            continue;
+        }
+        dropped_entries = dropped_entries.saturating_add(1);
+        dropped_nodes = dropped_nodes.saturating_add(subtree_size(index, child));
+        let aggregate = &index.aggregates[child];
+        dropped_bytes = dropped_bytes.saturating_add(aggregate.size_bytes);
+        dropped_files = dropped_files.saturating_add(aggregate.file_count);
+        dropped_folders = dropped_folders.saturating_add(aggregate.folder_count.saturating_add(1));
+        if let Some(bytes) = aggregate.disk_size_bytes {
+            disk_bytes = disk_bytes.saturating_add(bytes);
+        } else {
+            disk_complete = false;
+        }
+    }
+    for file_position in files {
+        if kept_set.contains(&ChildCandidate::File(file_position)) {
+            continue;
+        }
+        dropped_entries = dropped_entries.saturating_add(1);
+        dropped_nodes = dropped_nodes.saturating_add(1);
+        let file = &index.files[file_position];
+        dropped_bytes = dropped_bytes.saturating_add(file.size);
+        dropped_files = dropped_files.saturating_add(1);
+        if let Some(bytes) = file.disk_size {
+            disk_bytes = disk_bytes.saturating_add(bytes);
+        } else {
+            disk_complete = false;
+        }
+    }
+
     let directory = &index.directories[position];
-    let aggregate = &index.aggregates[position];
-    let path = &directory.path;
-    let is_symlink = directory.is_symlink;
-    let is_junction = directory.is_junction;
-
-    let mut node = TreeNode {
-        id: stable_path_id(path),
-        path: path.to_string_lossy().to_string(),
-        name: directory.name.clone(),
-        kind: "folder".to_string(),
-        size_bytes: aggregate.size_bytes,
-        disk_size_bytes: aggregate.disk_size_bytes,
-        file_count: aggregate.file_count,
-        folder_count: aggregate.folder_count,
-        modified_at: aggregate.modified_at,
-        created_at: aggregate.created_at,
-        extension: None,
-        category: classify(path, true),
-        access_denied: aggregate.access_denied,
-        children: Vec::new(),
-        synthetic: false,
-        is_symlink: if is_symlink { Some(true) } else { None },
-        is_junction: if is_junction { Some(true) } else { None },
-        is_cloud_placeholder: None,
-        cloud_status: None,
-    };
-
-    if depth >= max_depth {
-        // Everything below this point is folded into the node's totals.
-        *pruned_nodes += subtree_size(index, position).saturating_sub(1);
-        return node;
-    }
-
-    let mut children: Vec<TreeNode> = Vec::new();
-
-    // Folders first (biggest first), then the folder's own files.
-    let child_dirs: Vec<usize> = index.children_of(position);
-    let child_files = index.files_of(position);
-
-    let mut candidates: Vec<TreeNode> = Vec::with_capacity(child_dirs.len() + child_files.len());
-    for child in &child_dirs {
-        candidates.push(build_node(index, *child, depth + 1, max_children, max_depth, pruned_nodes));
-    }
-    for file in &child_files {
-        candidates.push(file_node(file));
-    }
-
-    if candidates.len() <= max_children {
-        node.children = candidates;
-        return node;
-    }
-
-    // Keep the biggest consumers; fold the rest into one honest aggregate node.
-    candidates.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes).then_with(|| a.path.cmp(&b.path)));
-    let keep = max_children - 1;
-    let dropped: Vec<TreeNode> = candidates.split_off(keep);
-    *pruned_nodes += dropped.len();
-
-    let dropped_bytes: u64 = dropped.iter().map(|node| node.size_bytes).sum();
-    let dropped_files: u64 = dropped.iter().map(|node| node.file_count).sum();
-    let dropped_folders: u64 = dropped
-        .iter()
-        .map(|node| node.folder_count + if node.kind == "folder" { 1 } else { 0 })
-        .sum();
-    let dropped_disk: Option<u64> = if dropped.iter().any(|node| node.disk_size_bytes.is_some()) {
-        Some(dropped.iter().map(|node| node.disk_size_bytes.unwrap_or(0)).sum())
-    } else {
-        None
-    };
-
-    let other_path = format!("{}{}", path.to_string_lossy(), OTHER_NODE_SUFFIX);
+    let other_path = format!("{}{}", directory.path.to_string_lossy(), OTHER_NODE_SUFFIX);
     let other = TreeNode {
         id: stable_path_id(Path::new(&other_path)),
-        path: other_path.clone(),
-        name: other_node_name(dropped.len()),
+        path: other_path,
+        name: other_node_name(dropped_entries),
         kind: "folder".to_string(),
         size_bytes: dropped_bytes,
-        disk_size_bytes: dropped_disk,
+        disk_size_bytes: if disk_complete { Some(disk_bytes) } else { None },
         file_count: dropped_files,
         folder_count: dropped_folders,
         modified_at: None,
@@ -512,27 +779,121 @@ fn build_node(
         is_cloud_placeholder: None,
         cloud_status: None,
     };
+    (kept, Some(other), dropped_nodes)
+}
 
-    node.children = candidates;
-    node.children.push(other);
-    node
+fn direct_file_indices(index: &ScanIndex, position: usize) -> Vec<usize> {
+    index
+        .files_by_parent
+        .get(position)
+        .map(|files| {
+            files
+                .iter()
+                .copied()
+                .filter(|file| !index.removed_files.contains(file))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn top_candidates(
+    index: &ScanIndex,
+    directories: &[usize],
+    files: &[usize],
+    limit: usize,
+) -> Vec<ChildCandidate> {
+    let mut kept = Vec::with_capacity(limit.min(directories.len().saturating_add(files.len())));
+    let mut directory_index = 0usize;
+    let mut file_index = 0usize;
+    while kept.len() < limit && (directory_index < directories.len() || file_index < files.len()) {
+        let directory_candidate = directories
+            .get(directory_index)
+            .copied()
+            .map(ChildCandidate::Directory);
+        let file_candidate = files.get(file_index).copied().map(ChildCandidate::File);
+        match (directory_candidate, file_candidate) {
+            (Some(directory), Some(_file)) if compare_candidates(index, directory, _file) != std::cmp::Ordering::Greater => {
+                kept.push(directory);
+                directory_index += 1;
+            }
+            (Some(_), Some(file)) => {
+                kept.push(file);
+                file_index += 1;
+            }
+            (Some(directory), None) => {
+                kept.push(directory);
+                directory_index += 1;
+            }
+            (None, Some(file)) => {
+                kept.push(file);
+                file_index += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    kept
+}
+
+fn compare_candidates(index: &ScanIndex, left: ChildCandidate, right: ChildCandidate) -> std::cmp::Ordering {
+    candidate_size(index, right)
+        .cmp(&candidate_size(index, left))
+        .then_with(|| candidate_path(index, left).cmp(candidate_path(index, right)))
+}
+
+fn candidate_size(index: &ScanIndex, candidate: ChildCandidate) -> u64 {
+    match candidate {
+        ChildCandidate::Directory(position) => index.aggregates[position].size_bytes,
+        ChildCandidate::File(position) => index.files[position].size,
+    }
+}
+
+fn candidate_path(index: &ScanIndex, candidate: ChildCandidate) -> &Path {
+    match candidate {
+        ChildCandidate::Directory(position) => index.directories[position].path.as_path(),
+        ChildCandidate::File(position) => index.files[position].path.as_path(),
+    }
+}
+
+fn directory_node(index: &ScanIndex, position: usize) -> TreeNode {
+    let directory = &index.directories[position];
+    let aggregate = &index.aggregates[position];
+    TreeNode {
+        id: stable_path_id(&directory.path),
+        path: directory.path.to_string_lossy().to_string(),
+        name: directory.name.clone(),
+        kind: "folder".to_string(),
+        size_bytes: aggregate.size_bytes,
+        disk_size_bytes: aggregate.disk_size_bytes,
+        file_count: aggregate.file_count,
+        folder_count: aggregate.folder_count,
+        modified_at: aggregate.modified_at,
+        created_at: aggregate.created_at,
+        extension: None,
+        category: classify(&directory.path, true),
+        access_denied: aggregate.access_denied,
+        children: Vec::new(),
+        synthetic: false,
+        is_symlink: if directory.is_symlink { Some(true) } else { None },
+        is_junction: if directory.is_junction { Some(true) } else { None },
+        is_cloud_placeholder: None,
+        cloud_status: None,
+    }
 }
 
 fn file_node(file: &FileRecord) -> TreeNode {
-    let path = &file.path;
     TreeNode {
-        id: stable_path_id(path),
-        path: path.to_string_lossy().to_string(),
+        id: stable_path_id(&file.path),
+        path: file.path.to_string_lossy().to_string(),
         name: file.name.clone(),
         kind: "file".to_string(),
         size_bytes: file.size,
         disk_size_bytes: file.disk_size,
-        file_count: 0,
+        file_count: 1,
         folder_count: 0,
         modified_at: file.modified_at,
         created_at: None,
         extension: file.extension.clone(),
-        category: classify(path, false),
+        category: classify(&file.path, false),
         access_denied: false,
         children: Vec::new(),
         synthetic: false,
@@ -542,19 +903,6 @@ fn file_node(file: &FileRecord) -> TreeNode {
         cloud_status: file.cloud_status.clone(),
     }
 }
-        size_bytes: file.size,
-        disk_size_bytes: file.disk_size,
-        file_count: 0,
-        folder_count: 0,
-        modified_at: file.modified_at,
-        created_at: None,
-        extension: file.extension.clone(),
-        category: classify(path, false),
-        access_denied: false,
-        children: Vec::new(),
-        synthetic: false,
-    }
-}
 
 /// Total number of nodes in a subtree, including the root.
 fn subtree_size(index: &ScanIndex, position: usize) -> usize {
@@ -562,7 +910,7 @@ fn subtree_size(index: &ScanIndex, position: usize) -> usize {
     let mut total = 0usize;
     let mut stack = vec![position];
     while let Some(current) = stack.pop() {
-        total += 1 + index.files_of(current).len();
+        total = total.saturating_add(1usize.saturating_add(index.files_of(current).len()));
         for child in index.children_of(current) {
             stack.push(child);
         }
@@ -574,7 +922,8 @@ fn index_depth(index: &ScanIndex, root: usize) -> usize {
     let mut deepest = 0usize;
     let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
     while let Some((position, depth)) = stack.pop() {
-        deepest = deepest.max(depth + usize::from(!index.files_of(position).is_empty()));
+        let file_depth = if index.files_of(position).is_empty() { depth } else { depth + 1 };
+        deepest = deepest.max(file_depth);
         for child in index.children_of(position) {
             stack.push((child, depth + 1));
         }
@@ -582,8 +931,15 @@ fn index_depth(index: &ScanIndex, root: usize) -> usize {
     deepest
 }
 
+#[cfg(test)]
 fn count_nodes(node: &TreeNode) -> usize {
-    1 + node.children.iter().map(count_nodes).sum::<usize>()
+    let mut total = 0usize;
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        total = total.saturating_add(1);
+        stack.extend(current.children.iter());
+    }
+    total
 }
 
 pub fn other_node_name(count: usize) -> String {
@@ -632,9 +988,9 @@ mod tests {
     #[test]
     fn aggregates_sizes_up_the_tree() {
         let root = temp_dir("rollup");
-        fs::create_dir_all(root.join("a\\b")).unwrap();
-        fs::write(root.join("a\\b\\deep.bin"), vec![0u8; 2048]).unwrap();
-        fs::write(root.join("a\\mid.bin"), vec![0u8; 512]).unwrap();
+        fs::create_dir_all(root.join("a").join("b")).unwrap();
+        fs::write(root.join("a").join("b").join("deep.bin"), vec![0u8; 2048]).unwrap();
+        fs::write(root.join("a").join("mid.bin"), vec![0u8; 512]).unwrap();
         fs::write(root.join("top.txt"), vec![0u8; 64]).unwrap();
 
         let run = scan(&root);
@@ -699,10 +1055,49 @@ mod tests {
     }
 
     #[test]
+    fn very_deep_directory_chains_are_capped_without_recursive_building() {
+        let levels = MAX_TREE_DEPTH + 700;
+        let mut directories = Vec::with_capacity(levels + 1);
+        let mut path = PathBuf::from("/");
+        directories.push(DirectoryRecord {
+            name: "root".to_string(),
+            path: path.clone(),
+            parent: None,
+            depth: 0,
+            modified_at: None,
+            created_at: None,
+            is_symlink: false,
+            is_junction: false,
+            access_denied: false,
+        });
+        for depth in 1..=levels {
+            let name = format!("d{depth}");
+            path.push(name.as_str());
+            directories.push(DirectoryRecord {
+                name,
+                path: path.clone(),
+                parent: None,
+                depth,
+                modified_at: None,
+                created_at: None,
+                is_symlink: false,
+                is_junction: false,
+                access_denied: false,
+            });
+        }
+        let index = ScanIndex::from_parts(Vec::new(), directories);
+        let root = index.position_of(Path::new("/")).unwrap();
+        let result = prune_tree(&index, root, PruneOptions::default());
+        assert_eq!(count_nodes(&result.tree), MAX_TREE_DEPTH + 1);
+        assert_eq!(result.pruned_nodes, levels - MAX_TREE_DEPTH);
+        assert!(result.truncated);
+    }
+
+    #[test]
     fn a_small_tree_is_not_truncated() {
         let root = temp_dir("small");
         fs::create_dir_all(root.join("a")).unwrap();
-        fs::write(root.join("a\\one.bin"), vec![0u8; 8]).unwrap();
+        fs::write(root.join("a").join("one.bin"), vec![0u8; 8]).unwrap();
         let run = scan(&root);
         let index = ScanIndex::from_run(&run);
         let position = index.position_of(&root).unwrap();
@@ -758,6 +1153,8 @@ mod tests {
             depth: 0,
             modified_at: None,
             created_at: None,
+            is_symlink: false,
+            is_junction: false,
             access_denied: false,
         });
         for level in 0..depth {
@@ -769,6 +1166,8 @@ mod tests {
                 depth: level + 1,
                 modified_at: None,
                 created_at: None,
+                is_symlink: false,
+                is_junction: false,
                 access_denied: false,
             });
             let parent_path = path.clone();
@@ -780,8 +1179,8 @@ mod tests {
                     disk_size: Some(4096),
                     modified_at: None,
                     extension: Some("bin".to_string()),
-                    parent_path: parent_path.clone(),
                     depth: level + 1,
+                    ..Default::default()
                 });
             }
         }
@@ -836,6 +1235,47 @@ mod tests {
             );
             assert_eq!(result.tree.size_bytes, expected);
         }
+    }
+
+    #[test]
+    fn paged_children_are_sorted_filtered_and_capped() {
+        let run = deep_chain(1);
+        let index = ScanIndex::from_run(&run);
+        let folder = index.children_of(0)[0];
+
+        let (total, by_size) = index
+            .children_page(folder, 0, 10_000, EntrySort::Size, true, "")
+            .unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(by_size.len(), 2);
+        let first = match by_size[0] {
+            IndexedEntry::File(position) => &index.files[position],
+            IndexedEntry::Directory(_) => panic!("expected files in the test folder"),
+        };
+        assert_eq!(first.name, "f1.bin");
+
+        let (filtered_total, filtered) = index
+            .children_page(folder, 0, 100, EntrySort::Name, false, "f1")
+            .unwrap();
+        assert_eq!(filtered_total, 1);
+        assert_eq!(filtered.len(), 1);
+
+        let (empty_total, empty) = index
+            .children_page(folder, 0, 1, EntrySort::Name, false, "missing")
+            .unwrap();
+        assert_eq!(empty_total, 0);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn paged_children_cache_is_invalidated_after_a_removal() {
+        let run = deep_chain(1);
+        let mut index = ScanIndex::from_run(&run);
+        let folder = index.children_of(0)[0];
+        let path = index.files_of(folder)[0].path.clone();
+        assert_eq!(index.children_page(folder, 0, 10, EntrySort::Name, false, "").unwrap().0, 2);
+        assert!(index.remove(&path));
+        assert_eq!(index.children_page(folder, 0, 10, EntrySort::Name, false, "").unwrap().0, 1);
     }
 
     #[test]
@@ -909,6 +1349,7 @@ mod tests {
         assert!(index.remove(&root.join("a\\drop.bin")));
         assert_eq!(index.total_bytes(), 100);
         assert_eq!(index.total_files(), 1);
+        assert_eq!(index.active_files().count(), 1);
         // The folder keeps its remaining child.
         let a = index.position_of(&root.join("a")).unwrap();
         assert_eq!(index.files_of(a).len(), 1);

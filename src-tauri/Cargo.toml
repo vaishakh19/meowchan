@@ -31,6 +31,7 @@ reqwest = { version = "0.13", features = ["json"] }
 
 # Cryptographic hashing for duplicate detection.
 sha2 = "0.10"
+libc = "0.2"
 
 
 # Parallel directory walking and hashing.

@@ -64,7 +64,7 @@ pub fn config() -> LicensingConfig {
         _ => "https://live.dodopayments.com".to_string(),
     };
     LicensingConfig {
-        api_base,
+        api_base: api_base.trim_end_matches('/').to_string(),
         product_id: option_env!("DISKORA_DODO_PRODUCT_ID")
             .unwrap_or_default()
             .trim()
@@ -77,11 +77,48 @@ pub fn config() -> LicensingConfig {
     }
 }
 
-/// True when the build carries the merchant's product id and payment link. Without
-/// these, no purchase is possible and the UI says so instead of faking a checkout.
+fn https_host(url: &str) -> Option<&str> {
+    let remainder = url.strip_prefix("https://")?;
+    let authority_end = remainder
+        .find(|character| matches!(character, '/' | '?' | '#'))
+        .unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    if authority.is_empty()
+        || authority.chars().any(|character| matches!(character, '@' | ':' | '\\'))
+        || !authority.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    {
+        return None;
+    }
+    Some(authority)
+}
+
+fn api_base_is_allowlisted(base: &str) -> bool {
+    let normalized = base.trim_end_matches('/');
+    ["https://live.dodopayments.com", "https://test.dodopayments.com"]
+        .iter()
+        .any(|allowed| normalized.eq_ignore_ascii_case(allowed))
+}
+
+fn config_hosts_are_allowlisted(config: &LicensingConfig) -> bool {
+    let expected_api = if config.environment == "test" {
+        "test.dodopayments.com"
+    } else {
+        "live.dodopayments.com"
+    };
+    let checkout_host = https_host(&config.checkout_url);
+    let expected_checkout = ["checkout.dodopayments.com", "test.checkout.dodopayments.com"];
+    https_host(&config.api_base).is_some_and(|host| host.eq_ignore_ascii_case(expected_api))
+        && api_base_is_allowlisted(&config.api_base)
+        && checkout_host.is_some_and(|host| expected_checkout.iter().any(|allowed| host.eq_ignore_ascii_case(allowed)))
+}
+
+/// True when the build carries a product id and Dodo-hosted checkout/API URLs.
+/// Only those allowlisted HTTPS endpoints can be used by the licensing path.
 pub fn is_configured() -> bool {
     let config = config();
-    !config.product_id.is_empty() && !config.checkout_url.is_empty()
+    !config.product_id.is_empty()
+        && !config.checkout_url.is_empty()
+        && config_hosts_are_allowlisted(&config)
 }
 
 /* -------------------------------- entitlement -------------------------------- */
@@ -99,6 +136,178 @@ pub struct StoredEntitlement {
     pub device_name: String,
     pub activated_at: i64,
     pub last_validated_at: i64,
+}
+
+const PROTECTED_ENTITLEMENT_PREFIX: &str = "dpapi-v1:";
+const MAX_ENTITLEMENT_BYTES: usize = 16 * 1024;
+
+/// Protects the entire entitlement JSON with user-scoped Windows DPAPI before it reaches SQLite.
+fn protect_entitlement(json: &str) -> Result<String, String> {
+    if json.len() > MAX_ENTITLEMENT_BYTES {
+        return Err("The entitlement exceeds the supported size.".to_string());
+    }
+    let protected = dpapi_protect(json.as_bytes())?;
+    Ok(format!("{PROTECTED_ENTITLEMENT_PREFIX}{}", encode_hex(&protected)))
+}
+
+/// Returns `None` for a legacy plaintext row so the caller can migrate it in place.
+fn unprotect_entitlement(stored: &str) -> Result<Option<String>, String> {
+    if stored.len() > MAX_ENTITLEMENT_BYTES * 2 + PROTECTED_ENTITLEMENT_PREFIX.len() {
+        return Err("The stored entitlement exceeds the supported size.".to_string());
+    }
+    let Some(hex) = stored.strip_prefix(PROTECTED_ENTITLEMENT_PREFIX) else {
+        return Ok(None);
+    };
+    if hex.len() > MAX_ENTITLEMENT_BYTES * 2 {
+        return Err("The protected entitlement exceeds the supported size.".to_string());
+    }
+    let encrypted = decode_hex(hex)?;
+    let bytes = dpapi_unprotect(&encrypted)?;
+    let json = String::from_utf8(bytes)
+        .map_err(|_| "The protected entitlement is not valid UTF-8.".to_string())?;
+    Ok(Some(json))
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
+    if text.len() % 2 != 0 || text.len() > MAX_ENTITLEMENT_BYTES * 2 {
+        return Err("The protected entitlement encoding is malformed.".to_string());
+    }
+    let mut decoded = Vec::with_capacity(text.len() / 2);
+    for pair in text.as_bytes().chunks_exact(2) {
+        let high = (pair[0] as char).to_digit(16);
+        let low = (pair[1] as char).to_digit(16);
+        match (high, low) {
+            (Some(high), Some(low)) => decoded.push(((high << 4) | low) as u8),
+            _ => return Err("The protected entitlement encoding is malformed.".to_string()),
+        }
+    }
+    Ok(decoded)
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DataBlob {
+    cb_data: u32,
+    pb_data: *mut u8,
+}
+
+#[cfg(windows)]
+#[link(name = "Crypt32")]
+unsafe extern "system" {
+    #[link_name = "CryptProtectData"]
+    fn crypt_protect_data(
+        data_in: *const DataBlob,
+        description: *const u16,
+        optional_entropy: *const DataBlob,
+        reserved: *mut std::ffi::c_void,
+        prompt: *mut std::ffi::c_void,
+        flags: u32,
+        data_out: *mut DataBlob,
+    ) -> i32;
+    #[link_name = "CryptUnprotectData"]
+    fn crypt_unprotect_data(
+        data_in: *const DataBlob,
+        description: *mut *mut u16,
+        optional_entropy: *const DataBlob,
+        reserved: *mut std::ffi::c_void,
+        prompt: *mut std::ffi::c_void,
+        flags: u32,
+        data_out: *mut DataBlob,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+#[link(name = "Kernel32")]
+unsafe extern "system" {
+    #[link_name = "LocalFree"]
+    fn local_free(memory: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+}
+
+#[cfg(windows)]
+fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
+    let length = u32::try_from(plain.len()).map_err(|_| "The entitlement is too large to protect.".to_string())?;
+    let input = DataBlob { cb_data: length, pb_data: plain.as_ptr() as *mut u8 };
+    let mut output = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
+    const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
+    // SAFETY: both blobs point to valid buffers for the duration of the call; the optional
+    // description, entropy, prompt, and reserved parameters are intentionally null.
+    let ok = unsafe {
+        crypt_protect_data(
+            &input,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+    };
+    if ok == 0 {
+        return Err(format!("Windows DPAPI could not protect the entitlement: {}", std::io::Error::last_os_error()));
+    }
+    take_dpapi_output(output)
+}
+
+#[cfg(windows)]
+fn dpapi_unprotect(encrypted: &[u8]) -> Result<Vec<u8>, String> {
+    let length = u32::try_from(encrypted.len()).map_err(|_| "The protected entitlement is too large.".to_string())?;
+    let input = DataBlob { cb_data: length, pb_data: encrypted.as_ptr() as *mut u8 };
+    let mut output = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
+    const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
+    // SAFETY: the input blob is valid for the call and Windows owns/allocates the output blob.
+    let ok = unsafe {
+        crypt_unprotect_data(
+            &input,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+    };
+    if ok == 0 {
+        return Err(format!("Windows DPAPI could not unprotect the entitlement: {}", std::io::Error::last_os_error()));
+    }
+    take_dpapi_output(output)
+}
+
+#[cfg(windows)]
+fn take_dpapi_output(output: DataBlob) -> Result<Vec<u8>, String> {
+    if output.cb_data > 0 && output.pb_data.is_null() {
+        return Err("Windows DPAPI returned an empty output buffer.".to_string());
+    }
+    // SAFETY: DPAPI returned `cb_data` bytes in a LocalAlloc buffer. Copy before freeing it.
+    let bytes = if output.cb_data == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(output.pb_data, output.cb_data as usize).to_vec() }
+    };
+    if !output.pb_data.is_null() {
+        // SAFETY: DPAPI allocated this output with LocalAlloc, as required by its API contract.
+        unsafe { local_free(output.pb_data.cast()) };
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(windows))]
+fn dpapi_protect(_plain: &[u8]) -> Result<Vec<u8>, String> {
+    Err("Diskora Pro entitlement storage requires Windows DPAPI.".to_string())
+}
+
+#[cfg(not(windows))]
+fn dpapi_unprotect(_encrypted: &[u8]) -> Result<Vec<u8>, String> {
+    Err("Diskora Pro entitlement storage requires Windows DPAPI.".to_string())
 }
 
 /// What the app may do, as decided by the licensing module.
@@ -288,8 +497,12 @@ impl DodoClient {
     /// errors: a client that cannot be built is reported, never
     /// silently defaulted.
     pub fn new(api_base: String) -> Result<Self, String> {
+        if !api_base_is_allowlisted(&api_base) {
+            return Err("The licensing API host is not on Diskora's allowlist.".to_string());
+        }
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| format!("Could not create the HTTP client: {error}"))?;
         Ok(Self { client, api_base })
@@ -342,7 +555,11 @@ impl DodoClient {
             .await
             .map_err(|error| format!("Dodo Payments sent an unreadable response: {error}"))?;
         if !status.is_success() {
-            // A key that is unknown, revoked, expired or exhausted is simply invalid.
+            // Treat transient service/rate-limit responses as unavailable so a paid customer is not
+            // permanently cleared by an outage. Other client errors represent an invalid key.
+            if status.is_server_error() || status.as_u16() == 408 || status.as_u16() == 429 {
+                return Err(format!("Dodo Payments could not validate the key (HTTP {}).", status.as_u16()));
+            }
             return Ok(false);
         }
         let parsed: DodoValidateResponse = serde_json::from_str(&body)
@@ -390,9 +607,19 @@ fn stored_entitlement(state: &AppState) -> AppResult<Option<StoredEntitlement>> 
         .ok_or_else(|| AppError::Database("The local database is unavailable; Diskora Pro cannot be activated.".to_string()))?;
     let payload = database.load_entitlement().map_err(AppError::Database)?;
     match payload {
-        Some(text) => serde_json::from_str::<StoredEntitlement>(&text)
-            .map(Some)
-            .map_err(|error| AppError::Database(format!("The stored entitlement is unreadable: {error}"))),
+        Some(stored) => {
+            let (json, needs_protection) = match unprotect_entitlement(&stored).map_err(AppError::Database)? {
+                Some(json) => (json, false),
+                None => (stored, true), // Migrate an older plaintext entitlement on first read.
+            };
+            let entitlement = serde_json::from_str::<StoredEntitlement>(&json)
+                .map_err(|error| AppError::Database(format!("The stored entitlement is unreadable: {error}")))?;
+            if needs_protection {
+                let protected = protect_entitlement(&json).map_err(AppError::Database)?;
+                database.save_entitlement(&protected).map_err(AppError::Database)?;
+            }
+            Ok(Some(entitlement))
+        }
         None => Ok(None),
     }
 }
@@ -400,7 +627,15 @@ fn stored_entitlement(state: &AppState) -> AppResult<Option<StoredEntitlement>> 
 /// The startup status: fast, honest, and never more optimistic than the last
 /// verified check plus the offline grace window.
 pub fn cached_status(state: &AppState) -> AppResult<ProStatus> {
-    let decision = decide(stored_entitlement(state)?, None, crate::time::now_millis());
+    let stored = stored_entitlement(state)?;
+    if !is_configured() {
+        return Ok(status_for(&ProDecision::Locked));
+    }
+    if stored.as_ref().is_some_and(|entitlement| entitlement.product_id != config().product_id) {
+        clear_stored(state)?;
+        return Ok(status_for(&ProDecision::Locked));
+    }
+    let decision = decide(stored, None, crate::time::now_millis());
     Ok(status_for(&decision))
 }
 
@@ -417,7 +652,15 @@ pub async fn verified_decision(state: &AppState) -> AppResult<ProDecision> {
     let Some(entitlement) = stored_entitlement(state)? else {
         return Ok(ProDecision::Locked);
     };
-    let client = DodoClient::new(config().api_base).map_err(AppError::Licence)?;
+    let config = config();
+    if !is_configured() {
+        return Ok(ProDecision::Locked);
+    }
+    if entitlement.product_id != config.product_id {
+        clear_stored(state)?;
+        return Ok(ProDecision::Locked);
+    }
+    let client = DodoClient::new(config.api_base).map_err(AppError::Licence)?;
     let validation = client
         .validate(&entitlement.license_key, entitlement.instance_id.as_deref())
         .await;
@@ -443,13 +686,21 @@ pub async fn verified_decision(state: &AppState) -> AppResult<ProDecision> {
     }
 }
 
-/// Requires an active Pro entitlement, or an error the command layer surfaces.
-pub async fn require_pro(state: &AppState) -> AppResult<()> {
-    if verified_decision(state).await?.is_active() {
-        Ok(())
-    } else {
-        Err(AppError::Licence(NOT_PURCHASED.to_string()))
+fn require_fresh_verification(decision: &ProDecision) -> AppResult<()> {
+    match decision {
+        ProDecision::Verified(_) => Ok(()),
+        ProDecision::OfflineGrace(_) => Err(AppError::Licence(
+            "Deletion requires a fresh Dodo Payments verification. Reconnect and try again; offline grace does not authorize deletion.".to_string(),
+        )),
+        ProDecision::Locked => Err(AppError::Licence(NOT_PURCHASED.to_string())),
     }
+}
+
+/// Deletion requires a successful, fresh Dodo verification; offline grace may show Pro as active
+/// but never authorizes a destructive operation.
+pub async fn require_pro(state: &AppState) -> AppResult<()> {
+    let decision = verified_decision(state).await?;
+    require_fresh_verification(&decision)
 }
 
 /// Activates a pasted key: Dodo checks it, Diskora checks it belongs to *this* product,
@@ -469,7 +720,6 @@ pub async fn activate(state: &AppState, license_key: &str) -> AppResult<ProStatu
 
     // A key for some other merchant's product must never unlock Diskora Pro.
     if activation.product_id != config().product_id {
-        let _ = clear_stored(state);
         return Err(AppError::Licence(
             "This license key belongs to a different product. Diskora Pro keys come from the Diskora Pro page.".to_string(),
         ));
@@ -504,8 +754,9 @@ fn touch_validated(state: &AppState, entitlement: &StoredEntitlement) -> AppResu
 }
 
 fn save_stored(state: &AppState, entitlement: &StoredEntitlement) -> AppResult<()> {
-    let payload = serde_json::to_string(entitlement)
+    let json = serde_json::to_string(entitlement)
         .map_err(|error| AppError::Internal(format!("The entitlement could not be serialized: {error}")))?;
+    let payload = protect_entitlement(&json).map_err(AppError::Database)?;
     let guard = state.database()?;
     let database = guard
         .as_ref()
@@ -610,6 +861,61 @@ mod tests {
         assert!(activation_failure(404, "{}").contains("does not know"));
         assert!(activation_failure(409, r#"{"message":"limit reached"}"#).contains("limit reached"));
         assert!(activation_failure(500, "boom").contains("HTTP 500"));
+    }
+
+    #[test]
+    fn licensing_hosts_are_https_and_allowlisted() {
+        let valid = LicensingConfig {
+            api_base: "https://live.dodopayments.com".to_string(),
+            product_id: "pdt_example".to_string(),
+            checkout_url: "https://checkout.dodopayments.com/buy/example".to_string(),
+            environment: "live",
+        };
+        assert!(config_hosts_are_allowlisted(&valid));
+
+        let mut arbitrary_api = valid.clone();
+        arbitrary_api.api_base = "https://attacker.example".to_string();
+        assert!(!config_hosts_are_allowlisted(&arbitrary_api));
+
+        let mut deceptive_checkout = valid.clone();
+        deceptive_checkout.checkout_url = "https://checkout.dodopayments.com.attacker.example/buy".to_string();
+        assert!(!config_hosts_are_allowlisted(&deceptive_checkout));
+
+        let mut credential_url = valid.clone();
+        credential_url.checkout_url = "https://checkout.dodopayments.com@attacker.example/buy".to_string();
+        assert!(!config_hosts_are_allowlisted(&credential_url));
+    }
+
+    #[test]
+    fn the_license_api_client_rejects_unallowlisted_hosts_and_paths() {
+        assert!(DodoClient::new("https://attacker.example".to_string()).is_err());
+        assert!(DodoClient::new("https://live.dodopayments.com/unexpected".to_string()).is_err());
+        assert!(DodoClient::new("https://live.dodopayments.com".to_string()).is_ok());
+    }
+
+    #[test]
+    fn offline_grace_cannot_authorize_deletion() {
+        assert!(require_fresh_verification(&ProDecision::Verified(entitlement(NOW))).is_ok());
+        let error = require_fresh_verification(&ProDecision::OfflineGrace(entitlement(NOW))).unwrap_err();
+        assert!(error.to_string().contains("offline grace does not authorize deletion"));
+        assert!(require_fresh_verification(&ProDecision::Locked).is_err());
+    }
+
+    #[test]
+    fn protected_entitlement_encoding_is_strict() {
+        assert_eq!(decode_hex("00aF").unwrap(), vec![0, 0xaf]);
+        assert!(decode_hex("0").is_err());
+        assert!(decode_hex("zz").is_err());
+        assert_eq!(encode_hex(&[0, 0xaf]), "00af");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn user_scoped_dpapi_round_trips_entitlement_payloads() {
+        let clear = br#"{"licenseKey":"do-not-store-in-plaintext"}"#;
+        let protected = dpapi_protect(clear).unwrap();
+        assert_ne!(protected, clear);
+        assert_eq!(dpapi_unprotect(&protected).unwrap(), clear);
     }
 
     #[test]

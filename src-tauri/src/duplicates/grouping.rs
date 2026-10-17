@@ -5,13 +5,11 @@
 //! removes the overwhelming majority of candidates for free.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use rayon::prelude::*;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 
-use crate::duplicates::hashing::{hash_file, HashAlgorithm};
+use crate::duplicates::hashing::{hash_file_cancellable, partial_hash_file, HashAlgorithm, PARTIAL_HASH_BYTES};
 use crate::filesystem::FileRecord;
 use crate::scanner::walker::WalkError;
 
@@ -48,7 +46,6 @@ pub struct DuplicateFile {
     pub name: String,
     pub size_bytes: u64,
     pub modified_at: Option<i64>,
-    pub byte_verified: bool,
     pub is_suggested_original: bool,
 }
 
@@ -61,8 +58,6 @@ pub struct DuplicateGroup {
     pub reclaimable_bytes: u64,
     pub copies: Vec<DuplicateFile>,
     pub hash: String,
-    /// `size` = grouped by size only, `hash` = confirmed by content hash, `verified` = byte compared.
-    pub confidence: String,
 }
 
 /// Mirrors `DuplicateReport`.
@@ -76,80 +71,115 @@ pub struct DuplicateReport {
     pub status: String,
     pub algorithm: String,
     pub groups: Vec<DuplicateGroup>,
+    pub candidate_groups: usize,
     pub total_groups: usize,
     pub total_copies: usize,
     pub total_reclaimable_bytes: u64,
     pub hashed_bytes: u64,
     pub files_hashed: u64,
+    pub skipped_large_files: u64,
+    pub skipped_large_bytes: u64,
     pub errors: Vec<WalkError>,
 }
 
-/// Truncates a report to the largest `limit` groups, recomputing every total exactly.
-///
-/// This is the enforcement point for the free tier's group limit. It runs in the backend, after
-/// the report is built, so no amount of interface tampering can lift it. `limit` of `None` leaves
-/// the report untouched.
-///
-/// The recomputation is exact rather than a running delta, because the UI must never show a size
-/// the backend cannot account for.
-pub fn limit_groups(report: DuplicateReport, limit: Option<usize>) -> DuplicateReport {
-    let Some(limit) = limit else {
-        return report;
-    };
-    if report.groups.len() <= limit {
-        return report;
-    }
+/// Hard cap: duplicate detection never hashes a file larger than 5 GiB.
+pub const MAX_DUPLICATE_FILE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
-    // Groups are already ordered largest reclaimable first; re-sorting after truncation is cheap
-    // and guarantees the ordering the UI relies on.
-    let mut kept = report.groups;
-    kept.sort_by(|a, b| b.reclaimable_bytes.cmp(&a.reclaimable_bytes));
-    kept.truncate(limit);
-
-    let total_copies: usize = kept.iter().map(|group| group.copies.len()).sum();
-    let total_reclaimable_bytes: u64 = kept.iter().map(|group| group.reclaimable_bytes).sum();
-
-    DuplicateReport {
-        groups: kept,
-        total_groups: limit,
-        total_copies,
-        total_reclaimable_bytes,
-        ..report
+fn effective_max_bytes(options: &DuplicateOptions) -> u64 {
+    if options.max_bytes == 0 {
+        MAX_DUPLICATE_FILE_BYTES
+    } else {
+        options.max_bytes.min(MAX_DUPLICATE_FILE_BYTES)
     }
 }
 
-/// Stage 1: bucket files by exact size. Cheap, and removes almost everything.
+fn matches_non_size_filters(file: &FileRecord, options: &DuplicateOptions) -> bool {
+    if file.is_symlink || file.is_junction || file.is_cloud_placeholder {
+        return false;
+    }
+    if !options.extensions.is_empty() {
+        match &file.extension {
+            Some(extension) if options.extensions.iter().any(|value| {
+                value.trim_start_matches('.').eq_ignore_ascii_case(extension)
+            }) => {}
+            _ => return false,
+        }
+    }
+    !is_excluded(&file.path, &options.exclude_paths)
+}
+
+/// Stage 1: bucket ordinary files by exact size. Link entries, cloud placeholders, and paths the
+/// user excluded never reach a content-reading stage.
 pub fn group_by_size<'a>(
     files: &'a [FileRecord],
     options: &DuplicateOptions,
 ) -> Vec<(u64, Vec<&'a FileRecord>)> {
+    let references: Vec<&FileRecord> = files.iter().collect();
+    group_refs_by_size(&references, options)
+}
+
+fn group_refs_by_size<'a>(
+    files: &[&'a FileRecord],
+    options: &DuplicateOptions,
+) -> Vec<(u64, Vec<&'a FileRecord>)> {
+    group_refs_by_size_cancellable(files, options, None).unwrap_or_default()
+}
+
+fn group_refs_by_size_cancellable<'a>(
+    files: &[&'a FileRecord],
+    options: &DuplicateOptions,
+    cancelled: Option<&AtomicBool>,
+) -> Option<Vec<(u64, Vec<&'a FileRecord>)>> {
     let mut buckets: HashMap<u64, Vec<&FileRecord>> = HashMap::new();
-    for file in files {
-        if file.size < options.min_bytes || file.size > options.max_bytes {
-            continue;
+    let max_bytes = effective_max_bytes(options);
+    for (index, file) in files.iter().copied().enumerate() {
+        if index % 1024 == 0 && is_cancelled(cancelled) {
+            return None;
         }
-        if !options.extensions.is_empty() {
-            match &file.extension {
-                Some(extension) if options.extensions.iter().any(|e| e == extension) => {}
-                _ => continue,
-            }
-        }
-        if is_excluded(&file.path, &options.exclude_paths) {
+        if file.size < options.min_bytes || file.size > max_bytes || !matches_non_size_filters(file, options) {
             continue;
         }
         buckets.entry(file.size).or_default().push(file);
+    }
+    if is_cancelled(cancelled) {
+        return None;
     }
     let mut out: Vec<(u64, Vec<&FileRecord>)> = buckets
         .into_iter()
         .filter(|(_, group)| group.len() > 1)
         .collect();
-    // Biggest reclaimable potential first.
     out.sort_by(|a, b| {
-        let savings_a = a.0 * (a.1.len() as u64 - 1);
-        let savings_b = b.0 * (b.1.len() as u64 - 1);
+        let savings_a = a.0.saturating_mul(a.1.len().saturating_sub(1) as u64);
+        let savings_b = b.0.saturating_mul(b.1.len().saturating_sub(1) as u64);
         savings_b.cmp(&savings_a).then_with(|| a.0.cmp(&b.0))
     });
-    out
+    Some(out)
+}
+
+fn skipped_large_files(
+    files: &[&FileRecord],
+    options: &DuplicateOptions,
+    cancelled: Option<&AtomicBool>,
+) -> Option<(u64, u64)> {
+    let mut count = 0u64;
+    let mut bytes = 0u64;
+    for (index, file) in files.iter().enumerate() {
+        if index % 1024 == 0 && is_cancelled(cancelled) {
+            return None;
+        }
+        if file.size > MAX_DUPLICATE_FILE_BYTES
+            && file.size >= options.min_bytes
+            && matches_non_size_filters(file, options)
+        {
+            count = count.saturating_add(1);
+            bytes = bytes.saturating_add(file.size);
+        }
+    }
+    Some((count, bytes))
+}
+
+fn is_cancelled(cancelled: Option<&AtomicBool>) -> bool {
+    cancelled.map(|flag| flag.load(Ordering::SeqCst)).unwrap_or(false)
 }
 
 fn is_excluded(path: &Path, exclusions: &[String]) -> bool {
@@ -164,10 +194,7 @@ fn is_excluded(path: &Path, exclusions: &[String]) -> bool {
     })
 }
 
-/// Stage 2 + 3: hash each size group, then optionally verify byte-for-byte.
-///
-/// `on_progress` is called with (files hashed, bytes hashed) after each group so the emitter can
-/// publish throttled progress without the scanner holding a lock.
+/// Compatibility wrapper used by unit tests. The command path uses the cancellable progress API.
 pub fn build_report<F>(
     files: &[FileRecord],
     options: &DuplicateOptions,
@@ -178,133 +205,237 @@ pub fn build_report<F>(
 where
     F: FnMut(u64, u64),
 {
-    let size_groups = group_by_size(files, options);
+    let not_cancelled = AtomicBool::new(false);
+    let references: Vec<&FileRecord> = files.iter().collect();
+    build_report_with_progress(&references, options, report_id, started_at, &not_cancelled, |_, files, bytes, _, _| {
+        on_progress(files, bytes);
+    })
+}
 
+/// Size -> partial SHA-256 sample -> full streaming SHA-256. Cancellation is checked between file
+/// reads, and progress is emitted after each candidate rather than only after an entire size group.
+pub fn build_report_with_progress<F>(
+    files: &[&FileRecord],
+    options: &DuplicateOptions,
+    report_id: String,
+    started_at: i64,
+    cancelled: &AtomicBool,
+    mut on_progress: F,
+) -> DuplicateReport
+where
+    F: FnMut(&'static str, u64, u64, usize, usize),
+{
+    on_progress("grouping", 0, 0, 0, 0);
+    let grouping = group_refs_by_size_cancellable(files, options, Some(cancelled)).and_then(|size_groups| {
+        skipped_large_files(files, options, Some(cancelled)).map(|skipped| (size_groups, skipped))
+    });
+    let (size_groups, (skipped_large_files, skipped_large_bytes)) = match grouping {
+        Some(result) => result,
+        None => {
+            on_progress("finalizing", 0, 0, 0, 0);
+            return DuplicateReport {
+                report_id,
+                scan_id: options.scan_id.clone(),
+                started_at,
+                finished_at: Some(now_millis()),
+                status: "cancelled".to_string(),
+                algorithm: options.algorithm.as_str().to_string(),
+                groups: Vec::new(),
+                candidate_groups: 0,
+                total_groups: 0,
+                total_copies: 0,
+                total_reclaimable_bytes: 0,
+                hashed_bytes: 0,
+                files_hashed: 0,
+                skipped_large_files: 0,
+                skipped_large_bytes: 0,
+                errors: Vec::new(),
+            };
+        }
+    };
+    let candidate_groups = size_groups.len();
     let mut groups: Vec<DuplicateGroup> = Vec::new();
     let mut errors: Vec<WalkError> = Vec::new();
     let mut hashed_bytes = 0u64;
     let mut files_hashed = 0u64;
+    on_progress("grouping", 0, 0, candidate_groups, 0);
 
-    for (size, candidates) in &size_groups {
-        // Hash in parallel: each file is independent and I/O bound.
-        let hashed: Vec<(&FileRecord, Option<String>)> = candidates
-            .par_iter()
-            .map(|file| (*file, hash_file(&file.path, options.algorithm).ok()))
-            .collect();
-
-        let mut by_hash: HashMap<String, Vec<&FileRecord>> = HashMap::new();
-        for (file, digest) in hashed {
-            match digest {
-                Some(digest) => {
-                    hashed_bytes += file.size;
-                    files_hashed += 1;
-                    by_hash.entry(digest).or_default().push(file);
+    'size_groups: for (size, candidates) in &size_groups {
+        let mut partial_buckets: HashMap<String, Vec<&FileRecord>> = HashMap::new();
+        for file in candidates {
+            if cancelled.load(Ordering::SeqCst) {
+                break 'size_groups;
+            }
+            match partial_hash_file(&file.path, file.size, Some(cancelled)) {
+                Ok((digest, bytes_read)) => {
+                    files_hashed = files_hashed.saturating_add(1);
+                    hashed_bytes = hashed_bytes.saturating_add(bytes_read);
+                    partial_buckets.entry(digest).or_default().push(file);
                 }
-                None => errors.push(WalkError {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    break 'size_groups;
+                }
+                Err(error) => errors.push(WalkError {
                     path: file.path.to_string_lossy().to_string(),
-                    kind: "access-denied".to_string(),
-                    message: "The file could not be read for hashing.".to_string(),
+                    kind: hashing_error_kind(&error),
+                    message: error.to_string(),
                 }),
             }
+            on_progress("partial-hashing", files_hashed, hashed_bytes, candidate_groups, groups.len());
         }
-        on_progress(files_hashed, hashed_bytes);
 
-        for (digest, copies) in by_hash {
-            if copies.len() < 2 {
+        for partial_copies in partial_buckets.values() {
+            if partial_copies.len() < 2 {
                 continue;
             }
-            let mut entries: Vec<DuplicateFile> = copies
-                .iter()
-                .map(|file| DuplicateFile {
-                    path: file.path.to_string_lossy().to_string(),
-                    name: file.name.clone(),
-                    size_bytes: file.size,
-                    modified_at: file.modified_at,
-                    byte_verified: false,
-                    is_suggested_original: false,
-                })
-                .collect();
-
-            // Suggested original: oldest, then shallowest path, then lexicographic.
-            entries.sort_by(|a, b| {
-                a.modified_at
-                    .unwrap_or(i64::MAX)
-                    .cmp(&b.modified_at.unwrap_or(i64::MAX))
-                    .then_with(|| a.path.matches('\\').count().cmp(&b.path.matches('\\').count()))
-                    .then_with(|| a.path.cmp(&b.path))
-            });
-            if let Some(first) = entries.first_mut() {
-                first.is_suggested_original = true;
+            let mut full_hashes: HashMap<String, Vec<&FileRecord>> = HashMap::new();
+            let mut interrupted = false;
+            for file in partial_copies {
+                if cancelled.load(Ordering::SeqCst) {
+                    interrupted = true;
+                    break;
+                }
+                match hash_file_cancellable(&file.path, options.algorithm, Some(file.size), Some(cancelled)) {
+                    Ok((digest, bytes_read)) => {
+                        hashed_bytes = hashed_bytes.saturating_add(bytes_read);
+                        full_hashes.entry(digest).or_default().push(file);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                        interrupted = true;
+                        break;
+                    }
+                    Err(error) => errors.push(WalkError {
+                        path: file.path.to_string_lossy().to_string(),
+                        kind: hashing_error_kind(&error),
+                        message: error.to_string(),
+                    }),
+                }
+                on_progress("hashing", files_hashed, hashed_bytes, candidate_groups, groups.len());
+            }
+            if interrupted {
+                break 'size_groups;
             }
 
-            let copies_count = entries.len() as u64;
-            groups.push(DuplicateGroup {
-                group_id: format!("grp-{size}-{}", &digest[..8.min(digest.len())]),
-                size_bytes: *size,
-                reclaimable_bytes: size * (copies_count - 1),
-                copies: entries,
-                hash: digest,
-                confidence: "hash".to_string(),
-            });
+            for (digest, copies) in full_hashes {
+                if copies.len() < 2 {
+                    continue;
+                }
+                let mut entries: Vec<DuplicateFile> = copies
+                    .iter()
+                    .map(|file| DuplicateFile {
+                        path: file.path.to_string_lossy().to_string(),
+                        name: file.name.clone(),
+                        size_bytes: file.size,
+                        modified_at: file.modified_at,
+                        is_suggested_original: false,
+                    })
+                    .collect();
+                entries.sort_by(|a, b| {
+                    a.modified_at
+                        .unwrap_or(i64::MAX)
+                        .cmp(&b.modified_at.unwrap_or(i64::MAX))
+                        .then_with(|| Path::new(&a.path).components().count().cmp(&Path::new(&b.path).components().count()))
+                        .then_with(|| a.path.cmp(&b.path))
+                });
+                if let Some(first) = entries.first_mut() {
+                    first.is_suggested_original = true;
+                }
+                let copies_count = entries.len() as u64;
+                groups.push(DuplicateGroup {
+                    group_id: format!("grp-{size}-{digest}"),
+                    size_bytes: *size,
+                    reclaimable_bytes: size.saturating_mul(copies_count.saturating_sub(1)),
+                    copies: entries,
+                    hash: digest,
+                });
+            }
+            on_progress("hashing", files_hashed, hashed_bytes, candidate_groups, groups.len());
         }
     }
 
-    // Biggest savings first.
+    retain_live_copies(&mut groups, &mut errors);
     groups.sort_by(|a, b| b.reclaimable_bytes.cmp(&a.reclaimable_bytes));
-
     let total_groups = groups.len();
     let total_copies: usize = groups.iter().map(|group| group.copies.len()).sum();
-    let total_reclaimable_bytes: u64 = groups.iter().map(|group| group.reclaimable_bytes).sum();
+    let total_reclaimable_bytes = groups
+        .iter()
+        .fold(0u64, |total, group| total.saturating_add(group.reclaimable_bytes));
+    let status = if cancelled.load(Ordering::SeqCst) {
+        "cancelled"
+    } else if errors.is_empty() && skipped_large_files == 0 {
+        "complete"
+    } else {
+        "partial"
+    };
+    on_progress("finalizing", files_hashed, hashed_bytes, candidate_groups, total_groups);
 
     DuplicateReport {
         report_id,
         scan_id: options.scan_id.clone(),
         started_at,
         finished_at: Some(now_millis()),
-        status: "complete".to_string(),
+        status: status.to_string(),
         algorithm: options.algorithm.as_str().to_string(),
         groups,
+        candidate_groups,
         total_groups,
         total_copies,
         total_reclaimable_bytes,
         hashed_bytes,
         files_hashed,
+        skipped_large_files,
+        skipped_large_bytes,
         errors,
     }
 }
 
-/// Marks a group as byte-verified after a successful comparison.
-pub fn mark_verified(group: &mut DuplicateGroup) {
-    group.confidence = "verified".to_string();
-    for copy in group.copies.iter_mut() {
-        copy.byte_verified = true;
+fn hashing_error_kind(error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::PermissionDenied => "access-denied".to_string(),
+        std::io::ErrorKind::NotFound => "not-found".to_string(),
+        _ => "io".to_string(),
     }
 }
 
-/// Removes paths that no longer exist, so the report never offers a vanished file.
-pub fn retain_existing(groups: &mut Vec<DuplicateGroup>) -> usize {
-    let mut removed = 0usize;
+/// Rechecks candidate copies before returning a report. A copy that vanished, became a link, or
+/// changed since the scan is omitted, and the report becomes partial through its typed errors.
+fn retain_live_copies(groups: &mut Vec<DuplicateGroup>, errors: &mut Vec<WalkError>) {
     for group in groups.iter_mut() {
         let before = group.copies.len();
-        group.copies
-            .retain(|copy| PathBuf::from(&copy.path).exists());
-        let after = group.copies.len();
-        if after < before {
-            removed += before - after;
-            group.reclaimable_bytes = group.size_bytes.saturating_mul(after.saturating_sub(1) as u64);
-            if after < 2 {
-                group.reclaimable_bytes = 0;
+        let mut retained = Vec::with_capacity(before);
+        for copy in group.copies.drain(..) {
+            let path = Path::new(&copy.path);
+            let checked = crate::filesystem::entries::ensure_no_reparse_components(path)
+                .and_then(|()| crate::filesystem::entries::read_metadata(path, 0));
+            match checked {
+                Ok(metadata)
+                    if metadata.kind == crate::filesystem::Kind::File
+                        && metadata.size == copy.size_bytes
+                        && copy.modified_at.map(|expected| metadata.modified_at == Some(expected)).unwrap_or(true) =>
+                {
+                    retained.push(copy);
+                }
+                Ok(_) => errors.push(WalkError {
+                    path: copy.path,
+                    kind: "changed".to_string(),
+                    message: "The file changed after hashing and was omitted from the report.".to_string(),
+                }),
+                Err(error) => errors.push(WalkError {
+                    path: copy.path,
+                    kind: hashing_error_kind(&error),
+                    message: error.to_string(),
+                }),
             }
+        }
+        let after = retained.len();
+        group.copies = retained;
+        if after < before {
+            group.reclaimable_bytes = group
+                .size_bytes
+                .saturating_mul(after.saturating_sub(1) as u64);
         }
     }
     groups.retain(|group| group.copies.len() >= 2);
-    removed
-}
-
-/// The safe default for a fresh group list: nothing preselected for removal.
-pub fn nothing_preselected(groups: &[DuplicateGroup]) -> Vec<String> {
-    let _ = groups;
-    Vec::new()
 }
 
 pub fn now_millis() -> i64 {
@@ -315,107 +446,10 @@ pub fn now_millis() -> i64 {
 }
 
 #[cfg(test)]
-mod limit_tests {
-    use super::*;
-
-    fn group(id: &str, size: u64, copies: usize) -> DuplicateGroup {
-        DuplicateGroup {
-            group_id: id.to_string(),
-            size_bytes: size,
-            reclaimable_bytes: size * (copies.saturating_sub(1) as u64),
-            copies: (0..copies)
-                .map(|index| DuplicateFile {
-                    path: format!("C:\\{id}-{index}.bin"),
-                    name: format!("{id}-{index}.bin"),
-                    size_bytes: size,
-                    modified_at: None,
-                    byte_verified: false,
-                    is_suggested_original: index == 0,
-                })
-                .collect(),
-            hash: "h".to_string(),
-            confidence: "hash".to_string(),
-        }
-    }
-
-    fn report_of(count: usize) -> DuplicateReport {
-        let groups: Vec<DuplicateGroup> = (0..count)
-            .map(|index| group(&format!("g{index}"), 10_000 * (index as u64 + 1), 2))
-            .collect();
-        let total_copies: usize = groups.iter().map(|group| group.copies.len()).sum();
-        let total_reclaimable_bytes: u64 = groups.iter().map(|group| group.reclaimable_bytes).sum();
-        DuplicateReport {
-            report_id: "r".to_string(),
-            scan_id: "s".to_string(),
-            started_at: 0,
-            finished_at: Some(1),
-            status: "complete".to_string(),
-            algorithm: "sha256".to_string(),
-            total_groups: groups.len(),
-            total_copies,
-            total_reclaimable_bytes,
-            hashed_bytes: 0,
-            files_hashed: 0,
-            groups,
-            errors: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn a_report_within_the_limit_is_untouched() {
-        let report = report_of(3);
-        let before = report.total_reclaimable_bytes;
-        let limited = limit_groups(report, Some(5));
-        assert_eq!(limited.groups.len(), 3);
-        assert_eq!(limited.total_reclaimable_bytes, before);
-    }
-
-    #[test]
-    fn a_report_over_the_limit_keeps_the_largest_groups() {
-        let report = report_of(5);
-        // Each group reclaims `size` (two copies, one kept), so the three largest are 50k + 40k + 30k.
-        let limited = limit_groups(report, Some(3));
-        assert_eq!(limited.groups.len(), 3);
-        assert_eq!(limited.total_groups, 3);
-        assert_eq!(limited.total_reclaimable_bytes, 120_000);
-        assert_eq!(limited.total_copies, 6);
-        assert_eq!(limited.groups[0].size_bytes, 50_000);
-        assert_eq!(limited.groups[2].size_bytes, 30_000);
-    }
-
-    #[test]
-    fn no_limit_means_everything_is_kept() {
-        let report = report_of(5);
-        let limited = limit_groups(report, None);
-        assert_eq!(limited.groups.len(), 5);
-        assert_eq!(limited.total_reclaimable_bytes, 150_000);
-    }
-
-    #[test]
-    fn the_totals_stay_arithmetically_exact() {
-        let report = report_of(10);
-        let limited = limit_groups(report, Some(4));
-        let sum: u64 = limited.groups.iter().map(|group| group.reclaimable_bytes).sum();
-        assert_eq!(sum, limited.total_reclaimable_bytes);
-        let copies: usize = limited.groups.iter().map(|group| group.copies.len()).sum();
-        assert_eq!(copies, limited.total_copies);
-    }
-
-    #[test]
-    fn truncation_never_leaves_zero_copies() {
-        let report = report_of(6);
-        let limited = limit_groups(report, Some(2));
-        for kept in &limited.groups {
-            assert_eq!(kept.copies.len(), 2, "one original plus one reclaimable copy");
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::duplicates::hashing::hash_bytes;
     use std::fs;
+    use std::path::PathBuf;
 
     fn record(path: &str, size: u64) -> FileRecord {
         FileRecord {
@@ -428,8 +462,8 @@ mod tests {
             disk_size: None,
             modified_at: None,
             extension: None,
-            parent_path: PathBuf::from("C:\\"),
             depth: 1,
+            ..Default::default()
         }
     }
 
@@ -537,7 +571,6 @@ mod tests {
         assert_eq!(report.groups[0].size_bytes, 12);
         assert_eq!(report.groups[0].reclaimable_bytes, 12);
         assert_eq!(report.algorithm, "sha256");
-        assert_eq!(report.groups[0].confidence, "hash");
         assert_eq!(report.groups[0].copies.len(), 2);
         // Nothing is preselected: exactly one copy is flagged as the suggested original.
         assert_eq!(
@@ -592,7 +625,7 @@ mod tests {
         );
         assert_eq!(report.total_groups, 0);
         assert_eq!(report.errors.len(), 2);
-        assert_eq!(report.errors[0].kind, "access-denied");
+        assert_eq!(report.errors[0].kind, "not-found");
     }
 
     #[test]
@@ -650,53 +683,99 @@ mod tests {
     }
 
     #[test]
-    fn verified_groups_are_labelled() {
-        let mut group = DuplicateGroup {
+    fn partial_hash_collisions_require_a_full_sha256_match() {
+        let dir = std::env::temp_dir().join(format!("diskwise-partial-dup-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first.bin");
+        let second = dir.join("second.bin");
+        let a = vec![0u8; 200 * 1024];
+        let mut b = a.clone();
+        b[90 * 1024] = 1; // middle differs; the sampled prefix and suffix still match
+        fs::write(&first, &a).unwrap();
+        fs::write(&second, &b).unwrap();
+        let files = vec![record(&first.to_string_lossy(), a.len() as u64), record(&second.to_string_lossy(), b.len() as u64)];
+        let report = build_report(&files, &tiny_file_options(), "partial".to_string(), 0, |_, _| {});
+        assert_eq!(report.total_groups, 0);
+        assert_eq!(report.files_hashed, 2);
+        assert!(report.hashed_bytes > (PARTIAL_HASH_BYTES * 2 * 2) as u64);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn files_above_the_five_gibibyte_cap_are_reported_not_hashed() {
+        let size = MAX_DUPLICATE_FILE_BYTES + 1;
+        let files = vec![record("C:/huge-a.bin", size), record("C:/huge-b.bin", size)];
+        let report = build_report(&files, &tiny_file_options(), "large".to_string(), 0, |_, _| {});
+        assert_eq!(report.skipped_large_files, 2);
+        assert_eq!(report.skipped_large_bytes, size.saturating_mul(2));
+        assert_eq!(report.files_hashed, 0);
+        assert_eq!(report.total_groups, 0);
+        assert_eq!(report.status, "partial");
+    }
+
+    #[test]
+    fn duplicate_detection_never_hashes_reparse_entries() {
+        let mut first = record("C:/one.bin", 100);
+        let mut second = record("C:/two.bin", 100);
+        first.is_symlink = true;
+        second.is_symlink = true;
+        assert!(group_by_size(&[first, second], &tiny_file_options()).is_empty());
+    }
+
+    #[test]
+    fn cancellation_returns_an_explicit_cancelled_report() {
+        let cancelled = AtomicBool::new(true);
+        let files = vec![record("C:/one.bin", 10), record("C:/two.bin", 10)];
+        let references: Vec<&FileRecord> = files.iter().collect();
+        let report = build_report_with_progress(
+            &references,
+            &tiny_file_options(),
+            "cancelled".to_string(),
+            0,
+            &cancelled,
+            |_, _, _, _, _| {},
+        );
+        assert_eq!(report.status, "cancelled");
+        assert!(report.errors.is_empty());
+    }
+
+    #[test]
+    fn a_copy_changed_after_hashing_is_omitted_from_the_report() {
+        let directory = std::env::temp_dir().join(format!("diskora-duplicate-live-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let first = directory.join("first.bin");
+        let second = directory.join("second.bin");
+        fs::write(&first, b"same bytes").unwrap();
+        fs::write(&second, b"same bytes").unwrap();
+        let mut groups = vec![DuplicateGroup {
             group_id: "g".to_string(),
             size_bytes: 10,
             reclaimable_bytes: 10,
-            copies: vec![],
-            hash: hash_bytes(b"x"),
-            confidence: "hash".to_string(),
-        };
-        mark_verified(&mut group);
-        assert_eq!(group.confidence, "verified");
-    }
-
-    #[test]
-    fn vanished_copies_are_dropped_from_the_report() {
-        let mut groups = vec![DuplicateGroup {
-            group_id: "g".to_string(),
-            size_bytes: 100,
-            reclaimable_bytes: 200,
-            copies: vec![
-                DuplicateFile {
-                    path: "C:\\nope-a.bin".to_string(),
-                    name: "a".to_string(),
-                    size_bytes: 100,
+            copies: [first.clone(), second.clone()]
+                .iter()
+                .map(|path| DuplicateFile {
+                    path: path.to_string_lossy().to_string(),
+                    name: path.file_name().unwrap().to_string_lossy().to_string(),
+                    size_bytes: 10,
                     modified_at: None,
-                    byte_verified: false,
                     is_suggested_original: false,
-                },
-                DuplicateFile {
-                    path: "C:\\nope-b.bin".to_string(),
-                    name: "b".to_string(),
-                    size_bytes: 100,
-                    modified_at: None,
-                    byte_verified: false,
-                    is_suggested_original: false,
-                },
-            ],
+                })
+                .collect(),
             hash: "abc".to_string(),
-            confidence: "hash".to_string(),
         }];
-        retain_existing(&mut groups);
-        assert!(groups.is_empty(), "a group with fewer than two real copies is dropped");
-    }
+        let mut errors = Vec::new();
+        retain_live_copies(&mut groups, &mut errors);
+        assert_eq!(groups.len(), 1);
+        assert!(errors.is_empty());
 
-    #[test]
-    fn nothing_is_preselected_by_default() {
-        assert!(nothing_preselected(&[]).is_empty());
+        fs::write(&second, b"changed length").unwrap();
+        retain_live_copies(&mut groups, &mut errors);
+        assert!(groups.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, "changed");
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]

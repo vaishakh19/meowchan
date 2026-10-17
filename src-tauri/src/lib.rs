@@ -61,6 +61,7 @@ pub fn run() {
             commands::files::reveal_in_explorer,
             commands::files::open_path,
             commands::duplicates::find_duplicates,
+            commands::duplicates::duplicates_cancel,
             commands::duplicates::duplicates_get,
             commands::duplicates::verify_duplicates,
             commands::settings::settings_get,

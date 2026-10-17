@@ -5,6 +5,8 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+pub const MAX_SCAN_HISTORY: usize = 50;
+
 /// The single database handle. Wrapped in a mutex because `rusqlite::Connection` is not `Sync`.
 pub struct Database {
     connection: Mutex<Connection>,
@@ -48,7 +50,8 @@ impl Database {
             .lock()
             .map_err(|_| "The database lock was poisoned.".to_string())?;
 
-        // Do not drop legacy tables or reset user_version: preserve existing user data.
+        // New scans write summaries only. Do not drop or rewrite legacy tables such as
+        // `scan_snapshots`; they are preserved for user-data safety but are no longer accessed.
         connection.execute_batch(r#"
                     CREATE TABLE IF NOT EXISTS settings (
                         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -80,12 +83,12 @@ impl Database {
                         payload TEXT NOT NULL
                     );
 
-                    CREATE TABLE IF NOT EXISTS scan_snapshots (
-                        scan_id TEXT PRIMARY KEY,
-                        snapshot_json TEXT NOT NULL,
-                        created_at INTEGER NOT NULL
-                    );
         "#).map_err(|error| error.to_string())?;
+
+        // New columns are added in place so older `diskwise.sqlite3` files retain their rows.
+        ensure_column(&connection, "scan_history", "drive_id", "TEXT")?;
+        ensure_column(&connection, "scan_history", "persisted", "INTEGER NOT NULL DEFAULT 0")?;
+        prune_history(&connection)?;
         Ok(())
     }
 
@@ -153,6 +156,7 @@ impl Database {
                 ],
             )
             .map_err(|error| error.to_string())?;
+        prune_history(&connection)?;
         Ok(())
     }
 
@@ -163,7 +167,7 @@ impl Database {
                 "SELECT scan_id, root_path, root_name, started_at, finished_at, duration_ms,
                         status, total_bytes, file_count, folder_count, error_count, truncated,
                         drive_id, persisted
-                 FROM scan_history ORDER BY started_at DESC LIMIT ?1",
+                 FROM scan_history ORDER BY started_at DESC, scan_id DESC LIMIT ?1",
             )
             .map_err(|error| error.to_string())?;
 
@@ -229,41 +233,43 @@ impl Database {
         Ok(())
     }
 
-    /* ----------------------------- scan snapshots ----------------------------- */
-
-    pub fn save_scan_snapshot(&self, scan_id: &str, snapshot_json: &str) -> Result<(), String> {
-        let connection = self.lock()?;
-        let now = crate::time::now_millis();
-        connection
-            .execute(
-                "INSERT INTO scan_snapshots (scan_id, snapshot_json, created_at)
-                 VALUES (?1, ?2, ?3)
-                 ON CONFLICT(scan_id) DO UPDATE SET
-                    snapshot_json = excluded.snapshot_json,
-                    created_at = excluded.created_at",
-                params![scan_id, snapshot_json, now],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn load_scan_snapshot(&self, scan_id: &str) -> Result<Option<String>, String> {
-        let connection = self.lock()?;
-        connection
-            .query_row(
-                "SELECT snapshot_json FROM scan_snapshots WHERE scan_id = ?1",
-                params![scan_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())
-    }
-
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.connection
             .lock()
             .map_err(|_| "The database lock was poisoned.".to_string())
     }
+}
+
+fn prune_history(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM scan_history
+             WHERE scan_id NOT IN (
+                SELECT scan_id FROM scan_history
+                ORDER BY started_at DESC, scan_id DESC LIMIT ?1
+             )",
+            params![MAX_SCAN_HISTORY as i64],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn ensure_column(connection: &Connection, table: &str, column: &str, declaration: &str) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|error| error.to_string())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    if !columns.iter().any(|name| name == column) {
+        connection
+            .execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {declaration}"), [])
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 /// One row of `scan_history`. Mirrors the fields of `ScanSummary` the UI needs.
@@ -350,6 +356,37 @@ mod tests {
     }
 
     #[test]
+    fn history_retains_only_the_newest_fifty_summaries() {
+        let path = temp_db("history-limit");
+        let database = Database::open(&path).unwrap();
+        for index in 0i64..60 {
+            database
+                .insert_scan_history(&ScanHistoryRow {
+                    scan_id: format!("scan-{index:02}"),
+                    root_path: "C:\\".to_string(),
+                    root_name: "Local Disk (C:)".to_string(),
+                    started_at: index,
+                    finished_at: Some(index + 1),
+                    duration_ms: Some(1),
+                    status: "complete".to_string(),
+                    total_bytes: 10,
+                    file_count: 1,
+                    folder_count: 1,
+                    error_count: 0,
+                    truncated: false,
+                    drive_id: Some("C:".to_string()),
+                    persisted: true,
+                })
+                .unwrap();
+        }
+        let rows = database.list_scan_history(100).unwrap();
+        assert_eq!(rows.len(), MAX_SCAN_HISTORY);
+        assert_eq!(rows.first().unwrap().scan_id, "scan-59");
+        assert_eq!(rows.last().unwrap().scan_id, "scan-10");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn migrations_are_idempotent() {
         let path = temp_db("migrate");
         {
@@ -363,15 +400,51 @@ mod tests {
     }
 
     #[test]
+    fn migrations_add_history_columns_without_dropping_legacy_rows() {
+        let path = temp_db("legacy-history");
+        let legacy = Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE scan_history (
+                    scan_id TEXT PRIMARY KEY,
+                    root_path TEXT NOT NULL,
+                    root_name TEXT NOT NULL,
+                    started_at INTEGER NOT NULL,
+                    finished_at INTEGER,
+                    duration_ms INTEGER,
+                    status TEXT NOT NULL,
+                    total_bytes INTEGER NOT NULL,
+                    file_count INTEGER NOT NULL,
+                    folder_count INTEGER NOT NULL,
+                    error_count INTEGER NOT NULL,
+                    truncated INTEGER NOT NULL
+                 );
+                 INSERT INTO scan_history (
+                    scan_id, root_path, root_name, started_at, finished_at, duration_ms,
+                    status, total_bytes, file_count, folder_count, error_count, truncated
+                 ) VALUES ('legacy', 'C:\\\\', 'C:', 1, 2, 1, 'complete', 99, 3, 2, 0, 0);
+                 PRAGMA user_version = 17;",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let database = Database::open(&path).unwrap();
+        let rows = database.list_scan_history(MAX_SCAN_HISTORY).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].scan_id, "legacy");
+        assert_eq!(rows[0].total_bytes, 99);
+        assert_eq!(rows[0].drive_id, None);
+        assert!(!rows[0].persisted);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn entitlement_round_trips_and_clears() {
         let path = temp_db("entitlement");
         let database = Database::open(&path).unwrap();
         assert!(database.load_entitlement().unwrap().is_none());
-        database.save_entitlement("{\"licenseKey\":\"ABCD\"}").unwrap();
-        assert_eq!(
-            database.load_entitlement().unwrap().as_deref(),
-            Some("{\"licenseKey\":\"ABCD\"}")
-        );
+        database.save_entitlement("dpapi-v1:00ab").unwrap();
+        assert_eq!(database.load_entitlement().unwrap().as_deref(), Some("dpapi-v1:00ab"));
         database.clear_entitlement().unwrap();
         assert!(database.load_entitlement().unwrap().is_none());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

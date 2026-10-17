@@ -112,12 +112,12 @@ try {
 } catch (error) {
   console.error(`::error title=Desktop smoke test::${String(error).replaceAll('\n', '%0A')}`);
   if (socket?.readyState === WebSocket.OPEN) {
-    try { console.error(`::error title=Desktop contents::${(await evaluate('document.body.innerText')).slice(-2500).replaceAll('\n', '%0A')}`); } catch {}
+    try { console.error(`::error title=Desktop contents::${(await evaluate('document.body.innerText')).slice(-2500).replaceAll('\n', '%0A')}`); } catch { /* Keep the original smoke failure as the primary diagnostic. */ }
   }
   throw error;
 } finally {
   socket?.close();
   if (app.pid) spawnSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' });
   // Windows may retain a WebView2 handle briefly; leave only a temp directory if so.
-  try { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch {}
+  try { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* WebView2 may retain handles after taskkill; this directory is temporary. */ }
 }

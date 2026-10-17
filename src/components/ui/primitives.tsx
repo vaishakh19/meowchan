@@ -218,12 +218,14 @@ export function ProgressBar({
   tone = 'accent',
   className,
   label,
+  indeterminate = false,
 }: {
   /** 0..1 */
   value: number;
   tone?: 'accent' | 'danger' | 'ok';
   className?: string;
   label?: string;
+  indeterminate?: boolean;
 }) {
   const pct = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0)) * 100;
   const fill = tone === 'danger' ? 'bg-danger' : tone === 'ok' ? 'bg-ok' : 'bg-accent';
@@ -231,12 +233,15 @@ export function ProgressBar({
     <div
       className={cx('h-1.5 w-full overflow-hidden rounded-full bg-surface-sunken', className)}
       role="progressbar"
-      aria-valuenow={Math.round(pct)}
+      aria-valuenow={indeterminate ? undefined : Math.round(pct)}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-label={label}
     >
-      <div className={cx('h-full rounded-full transition-[width] duration-200', fill)} style={{ width: `${pct}%` }} />
+      <div
+        className={cx('h-full rounded-full transition-[width] duration-200', fill, indeterminate && 'diskora-progress-indeterminate')}
+        style={indeterminate ? { width: '35%' } : { width: `${pct}%` }}
+      />
     </div>
   );
 }

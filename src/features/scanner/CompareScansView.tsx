@@ -5,7 +5,7 @@
  * Shows net byte changes, category-level growth deltas, and the top growing / freed directories.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, GitCompare, TrendingDown, TrendingUp } from 'lucide-react';
 import { useApp } from '@/app/state';
 import { Button, EmptyState, Panel, SectionTitle, Select, Spinner, cx } from '@/components/ui/primitives';
@@ -23,7 +23,7 @@ export function CompareScansView({ onClose }: { onClose?: () => void }): React.J
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const runComparison = async () => {
+  const runComparison = useCallback(async () => {
     if (!baselineId || !currentId || baselineId === currentId) return;
     setLoading(true);
     setError(null);
@@ -36,13 +36,11 @@ export function CompareScansView({ onClose }: { onClose?: () => void }): React.J
     } finally {
       setLoading(false);
     }
-  };
+  }, [baselineId, currentId]);
 
   useEffect(() => {
-    if (baselineId && currentId && baselineId !== currentId) {
-      void runComparison();
-    }
-  }, [baselineId, currentId]);
+    void runComparison();
+  }, [runComparison]);
 
   if (history.length < 2) {
     return (

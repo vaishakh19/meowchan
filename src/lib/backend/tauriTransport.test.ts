@@ -23,4 +23,19 @@ describe('native transport', () => {
     expect(await createTauriTransport().scanStart(options)).toBe('scan-1');
     expect(invoke).toHaveBeenCalledWith('scan_start', { options });
   });
+
+  it('forwards duplicate cancellation to the native command', async () => {
+    await createTauriTransport().cancelDuplicates('dup-1');
+    expect(invoke).toHaveBeenCalledWith('duplicates_cancel', { reportId: 'dup-1' });
+  });
+
+  it('requests bounded scan-index pages with the selected sort and search', async () => {
+    invoke.mockResolvedValue({ path: 'C:/data', offset: 0, limit: 500, total: 1200, items: [] });
+    const query = {
+      scanId: 'scan-1', path: 'C:/data', offset: 0, limit: 500,
+      sort: 'name' as const, sortDir: 'asc' as const, search: 'report',
+    };
+    await createTauriTransport().scanChildren(query);
+    expect(invoke).toHaveBeenCalledWith('scan_children', { query });
+  });
 });

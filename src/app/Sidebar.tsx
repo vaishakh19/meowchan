@@ -163,10 +163,12 @@ export function Sidebar(): React.JSX.Element {
           <SectionTitle className="px-0 pt-0 pb-1">Scanning</SectionTitle>
           <ProgressBar
             value={progress.percent === null ? 0 : progress.percent / 100}
+            indeterminate={progress.percent === null}
             label="Scan progress"
             className="mb-2"
           />
           <dl className="dw-tnum space-y-0.5 text-[11px]">
+            <Row label="Entries" value={formatCount(progress.entriesScanned)} />
             <Row label="Files" value={formatCount(progress.filesScanned)} />
             <Row label="Folders" value={formatCount(progress.foldersScanned)} />
             <Row label="Analyzed" value={formatBytes(progress.bytesAnalyzed)} />

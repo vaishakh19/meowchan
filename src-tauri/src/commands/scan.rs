@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
 use crate::error::{AppError, AppResult};
-use crate::scanner::aggregate::{prune_tree, ScanIndex, TreeNode, PruneOptions};
+use crate::scanner::aggregate::{prune_tree, EntrySort, IndexedEntry, ScanIndex, TreeNode, PruneOptions};
 use crate::scanner::walker::{self, ScanOptions};
 use crate::state::{entry_from_run, AppState, ScanEntry};
-use crate::storage::db::ScanHistoryRow;
+use crate::storage::db::{ScanHistoryRow, MAX_SCAN_HISTORY};
 
 pub const SCAN_PROGRESS_EVENT: &str = "scan://progress";
 const PROGRESS_INTERVAL_MS: u64 = 100;
@@ -45,17 +45,37 @@ pub async fn scan_start(
     // Honour the user's settings unless the caller explicitly overrode them.
     let mut options = options;
     options.root_path = root.clone();
-    // The minimal analyzer does not follow links out of the selected tree.
+    // Link/reparse traversal is never enabled, regardless of persisted legacy preferences.
     options.follow_links = false;
     // A zero means "use the user's preference", never "scan nothing".
     if options.max_children_per_node == 0 {
         options.max_children_per_node = settings.max_children_per_node;
     }
 
-    let root_path = std::path::PathBuf::from(&root);
-    if !root_path.is_absolute() || !root_path.is_dir() {
+    let requested_root = std::path::PathBuf::from(&root);
+    if !requested_root.is_absolute() {
         return Err(AppError::InvalidArgument("Select an existing, absolute directory path.".to_string()));
     }
+    if requested_root.components().any(|component| {
+        matches!(component, std::path::Component::CurDir | std::path::Component::ParentDir)
+    }) {
+        return Err(AppError::InvalidArgument("Scan paths cannot contain . or .. components.".to_string()));
+    }
+    ensure_no_reparse_ancestors(&requested_root)?;
+    let root_metadata = crate::filesystem::entries::read_metadata(&requested_root, 0)
+        .map_err(|error| AppError::io(&root, &error))?;
+    if root_metadata.kind != crate::filesystem::Kind::Folder {
+        return Err(AppError::InvalidArgument("Select an existing directory.".to_string()));
+    }
+    let root_path = crate::filesystem::long_path::normalize_long_path(&requested_root);
+    let root = root_path.to_string_lossy().to_string();
+    options.root_path = root.clone();
+    options.max_entries = if options.max_entries == 0 {
+        walker::DEFAULT_MAX_ENTRIES
+    } else {
+        options.max_entries.min(walker::DEFAULT_MAX_ENTRIES)
+    };
+    options.max_children_per_node = options.max_children_per_node.clamp(2, 500);
 
     let scan_id = format!(
         "scan-{}-{}",
@@ -63,13 +83,9 @@ pub async fn scan_start(
         std::process::id()
     );
 
-    // Expected total, from volume metadata, drives the ETA and percentage. Only meaningful when
-    // scanning a whole volume; scanning a single folder has no honest expectation.
-    let expected_bytes = if is_drive_root(&root_path) {
-        volume_used_bytes(&root_path)
-    } else {
-        None
-    };
+    // A volume's used-space counter is physical allocation, while Diskora reports logical bytes.
+    // They are not comparable enough to claim a scan percentage, so leave the estimate unknown.
+    let expected_bytes: Option<u64> = None;
 
     let counters = Arc::new(crate::scanner::progress::ProgressCounters::new());
     let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -220,22 +236,18 @@ pub async fn scan_start(
     Ok(scan_id)
 }
 
-/** True when `path` is a drive root such as `C:\`. */
-fn is_drive_root(path: &std::path::Path) -> bool {
-    let text = path.to_string_lossy();
-    text.len() == 3 && text.ends_with('\\')
-}
-
-/// Bytes in use on the volume containing `path`. Used only as an ETA hint, so a folder scan
-/// (which has no honest expectation) gets `None` instead of a made-up number.
-fn volume_used_bytes(path: &std::path::Path) -> Option<u64> {
-    crate::platform::list_volumes()
-        .into_iter()
-        .find(|volume| {
-            let root = std::path::PathBuf::from(&volume.root);
-            path.starts_with(&root)
-        })
-        .map(|volume| volume.total_bytes.saturating_sub(volume.free_bytes))
+/// Refuse a selected path that lexically passes through any symbolic link or reparse point.
+/// Components are checked from the volume root down, before a child path is inspected.
+fn ensure_no_reparse_ancestors(path: &std::path::Path) -> AppResult<()> {
+    crate::filesystem::entries::ensure_no_reparse_components(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            AppError::InvalidArgument(format!(
+                "The scan root cannot pass through a symbolic link or reparse point: {error}"
+            ))
+        } else {
+            AppError::io(path.to_string_lossy().to_string(), &error)
+        }
+    })
 }
 
 /// Cancels a running scan. The walk stops within one directory read.
@@ -276,7 +288,7 @@ pub fn scan_get(scan_id: String, state: State<'_, AppState>) -> AppResult<Option
 /// Every scan this session knows about, newest first.
 #[tauri::command]
 pub fn scan_list(state: State<'_, AppState>) -> AppResult<Vec<ScanSummary>> {
-    // Scan *history* is a paid capability; this list is the in-memory one and stays free.
+    // Scan summaries are free and local. The full index remains in memory only for the latest scan.
     let mut summaries: Vec<ScanSummary> = {
         let scans = state.scans()?;
         let collected: Vec<ScanSummary> = scans
@@ -305,7 +317,7 @@ pub fn scan_list(state: State<'_, AppState>) -> AppResult<Vec<ScanSummary>> {
     // Merge in persisted history so the list survives a restart.
     if let Ok(guard) = state.database() {
         if let Some(database) = guard.as_ref() {
-            if let Ok(rows) = database.list_scan_history(50) {
+            if let Ok(rows) = database.list_scan_history(MAX_SCAN_HISTORY) {
                 let known: std::collections::HashSet<String> =
                     summaries.iter().map(|item| item.scan_id.clone()).collect();
                 for row in rows {
@@ -345,51 +357,73 @@ pub fn scan_delete(scan_id: String, state: State<'_, AppState>) -> AppResult<()>
     Ok(())
 }
 
-/// Paginated children of a directory inside a scan, for the virtualized file list.
+/// Query used by the paged, virtualized file list.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildrenQuery {
+    pub scan_id: String,
+    pub path: String,
+    pub offset: usize,
+    pub limit: usize,
+    #[serde(default = "default_children_sort")]
+    pub sort: String,
+    #[serde(default = "default_children_sort_direction")]
+    pub sort_dir: String,
+    #[serde(default)]
+    pub search: String,
+}
+
+fn default_children_sort() -> String { "size".to_string() }
+fn default_children_sort_direction() -> String { "desc".to_string() }
+
+/// Paginated children of a directory inside a scan. Each IPC response is capped at 1,000 records;
+/// the full index is never serialized into the webview.
 #[tauri::command]
-pub fn scan_children(
-    scan_id: String,
-    path: String,
-    offset: usize,
-    limit: usize,
-    state: State<'_, AppState>,
-) -> AppResult<ChildrenPage> {
+pub fn scan_children(query: ChildrenQuery, state: State<'_, AppState>) -> AppResult<ChildrenPage> {
+    let sort = match query.sort.as_str() {
+        "name" => EntrySort::Name,
+        "size" => EntrySort::Size,
+        "count" => EntrySort::Count,
+        "modified" => EntrySort::Modified,
+        _ => return Err(AppError::InvalidArgument("Unsupported file-list sort.".to_string())),
+    };
+    let descending = match query.sort_dir.as_str() {
+        "asc" => false,
+        "desc" => true,
+        _ => return Err(AppError::InvalidArgument("Sort direction must be asc or desc.".to_string())),
+    };
     let scans = state.scans()?;
     let entry = scans
-        .get(&scan_id)
-        .ok_or_else(|| AppError::NotFound(format!("Unknown scan {scan_id}")))?;
+        .get(&query.scan_id)
+        .ok_or_else(|| AppError::NotFound(format!("Unknown scan {}", query.scan_id)))?;
     let index = entry
         .index
         .as_ref()
         .ok_or_else(|| AppError::NotFound("The scan is still running.".to_string()))?;
-    // Readers and the (rare) deletion writer share the index through this
-    // lock; a page holds it only while the page is being built.
-    let index = index.read().expect("the scan index lock was poisoned");
-
-    let target = std::path::PathBuf::from(&path);
+    let index = index.read().map_err(|_| AppError::Internal("The scan index lock was poisoned.".to_string()))?;
+    let target = std::path::PathBuf::from(&query.path);
     let position = index
         .position_of(&target)
-        .ok_or_else(|| AppError::NotFound(path.clone()))?;
-
-    let mut items: Vec<TreeNode> = Vec::new();
-    for child in index.children_of(position) {
-        items.push(folder_node(&index, child));
-    }
-    for file in index.files_of(position) {
-        items.push(file_node(file));
-    }
-    items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes).then_with(|| a.path.cmp(&b.path)));
-
-    let total = items.len();
-    let limit = limit.clamp(1, 1000);
-    let page: Vec<TreeNode> = items.into_iter().skip(offset).take(limit).collect();
+        .ok_or_else(|| AppError::NotFound(query.path.clone()))?;
+    let limit = if query.limit == 0 { 200 } else { query.limit.clamp(1, 1000) };
+    let search: String = query.search.chars().take(512).collect();
+    let (total, indexed_page) = index
+        .children_page(position, query.offset, limit, sort, descending, &search)
+        .ok_or_else(|| AppError::Internal("Could not build the requested file-list page.".to_string()))?;
+    let items = indexed_page
+        .into_iter()
+        .map(|item| match item {
+            IndexedEntry::Directory(child) => folder_node(&index, child),
+            IndexedEntry::File(file) => file_node(&index.files[file]),
+        })
+        .collect();
 
     Ok(ChildrenPage {
-        path,
-        offset,
+        path: query.path,
+        offset: query.offset.min(total),
         limit,
         total,
-        items: page,
+        items,
     })
 }
 
@@ -412,6 +446,10 @@ fn folder_node(index: &ScanIndex, position: usize) -> TreeNode {
         access_denied: aggregate.access_denied,
         children: Vec::new(),
         synthetic: false,
+        is_symlink: if directory.is_symlink { Some(true) } else { None },
+        is_junction: if directory.is_junction { Some(true) } else { None },
+        is_cloud_placeholder: None,
+        cloud_status: None,
     }
 }
 
@@ -432,6 +470,10 @@ fn file_node(file: &crate::filesystem::FileRecord) -> TreeNode {
         access_denied: false,
         children: Vec::new(),
         synthetic: false,
+        is_symlink: if file.is_symlink { Some(true) } else { None },
+        is_junction: if file.is_junction { Some(true) } else { None },
+        is_cloud_placeholder: if file.is_cloud_placeholder { Some(true) } else { None },
+        cloud_status: file.cloud_status.clone(),
     }
 }
 
@@ -513,6 +555,10 @@ fn build_result(entry: &ScanEntry) -> ScanResult {
             access_denied: true,
             children: Vec::new(),
             synthetic: false,
+            is_symlink: None,
+            is_junction: None,
+            is_cloud_placeholder: None,
+            cloud_status: None,
         },
     };
 
@@ -725,18 +771,14 @@ pub fn export_scan_csv(request: CsvExportRequest, state: State<'_, AppState>) ->
         "duplicates" => {
             let reports = state.duplicate_reports.lock().map_err(|_| AppError::Internal("poisoned".into()))?;
             let report = reports.values().find(|r| r.scan_id == request.scan_id);
-            let mut csv = String::from("\"Group ID\",\"Hash\",\"Confidence\",\"Reclaimable Bytes\",\"File Path\",\"File Size\"\n");
+            let mut csv = String::from("\"Group ID\",\"Hash\",\"Reclaimable Bytes\",\"File Path\",\"File Size\"\n");
             if let Some(rep) = report {
                 for group in &rep.groups {
                     for copy in &group.copies {
                         csv.push_str(&format!(
-                            "{},{},{},{},{},{}\n",
+                            "{},{},{},{},{}\n",
                             csv_escape(&group.group_id),
                             csv_escape(&group.hash),
-                            csv_escape(match group.confidence {
-                                crate::duplicates::grouping::DuplicateConfidence::HashOnly => "hash",
-                                crate::duplicates::grouping::DuplicateConfidence::ByteVerified => "verified",
-                            }),
                             group.reclaimable_bytes,
                             csv_escape(&copy.path),
                             copy.size_bytes

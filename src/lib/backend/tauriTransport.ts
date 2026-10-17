@@ -14,6 +14,7 @@ import type {
   AppSettings,
   AppVersion,
   ChildrenPage,
+  ChildrenQuery,
   CsvExportRequest,
   DeleteItemsRequest,
   DeleteOutcome,
@@ -75,8 +76,7 @@ export function createTauriTransport(): BackendTransport {
     scanCancel: (scanId: string) => invoke<void>('scan_cancel', { scanId }),
     scanGet: (scanId: string) => invoke<ScanResult | null>('scan_get', { scanId }),
     scanList: () => invoke<ScanSummary[]>('scan_list'),
-    scanChildren: (scanId: string, path: string, offset: number, limit: number) =>
-      invoke<ChildrenPage>('scan_children', { scanId, path, offset, limit }),
+    scanChildren: (query: ChildrenQuery) => invoke<ChildrenPage>('scan_children', { query }),
     scanDelete: (scanId: string) => invoke<void>('scan_delete', { scanId }),
     userStorageReport: (scanId: string) => invoke<UserStorageReport>('user_storage_report', { scanId }),
     exportScanCsv: (request: CsvExportRequest) => invoke<string>('export_scan_csv', { request }),
@@ -91,6 +91,7 @@ export function createTauriTransport(): BackendTransport {
 
     /* Duplicates */
     findDuplicates: (options: DuplicateOptions) => invoke<string>('find_duplicates', { options }),
+    cancelDuplicates: (reportId: string) => invoke<void>('duplicates_cancel', { reportId }),
     duplicatesGet: (reportId: string) => invoke<DuplicateReport | null>('duplicates_get', { reportId }),
     verifyDuplicates: (pathA: string, pathB: string) =>
       invoke<DuplicateVerifyResult>('verify_duplicates', { pathA, pathB }),
